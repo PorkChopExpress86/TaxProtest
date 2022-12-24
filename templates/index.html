@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <div class="jumbotron">
+        <h1 class="display-4">Download Harris County Appraisal Data</h1>
+        <p class="lead">The data used here is pulled from HCAD's database once a day.</p>
+        <hr class="my-4">
+        <p>Enter the data into the form to download data for your house and houses near you to compare the market, land
+            and improvement values. Enter your account number, full or partial, street name, or zip code and click
+            submit.</p>
+        <p>Hints:
+        <ul>
+            <li>Account Number: enter the first 5 or 6 numbers to get all houses very close by.</li>
+            <li>Street: To narrow the search to your street enter a space before and after your street. There may still be
+                another street in Harris county with your street name, so pair it with your zip code.
+            </li>
+            <li>Zip Code: pair it with your street name to ensure that ONLY your street is selected or get your entire
+                zip code!
+            </li>
+        </ul>
+        </p>
+    </div>
+
+    <form method="POST" class="input-form">
+        <div class="container-fluid">
+            {{ form.hidden_tag() }}
+            {{ form.acct.label }} {{ form.acct(class="form-group", placeholder="Enter account number") }}
+            <br>
+            <br>
+            {{ form.street.label }} {{ form.street(class="form-group", placeholder="Street name") }}
+            <br>
+            <br>
+            {{ form.zip_code.label }} {{ form.zip_code(class="form-group", placeholder="Zip Code") }}
+            <br>
+            <br>
+            {{ form.submit() }}
+        </div>
+    </form>
+
+{% endblock %}
