@@ -1,3 +1,4 @@
 zipped_data/*
 text_files/*
 venv
+database.sqlite
