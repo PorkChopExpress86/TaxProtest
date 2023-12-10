@@ -1,1 +1,0 @@
-SELECT * from building_res;
