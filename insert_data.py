@@ -21,13 +21,15 @@ def insert_data(text_file_path, table_name, num_of_cols, cur):
     line_num = 0
     with open(text_file_path, 'rb') as f:
         for line in f:
-            # Some files are not ift-8 and need to be decoded
+            # Some files are not uft-8 and need to be decoded
             line = line.decode(errors='replace')
             line_list = line.split("\t")
             line_list = tuple(strip_list(line_list))
-            if line_num != 0:
+            line_len = len(line_list)
+            if line_num != 0 and line_len == num_of_cols:
                 cur.executemany(f"INSERT INTO {table_name} VALUES ({inserts})", (line_list,))
             else:
+                print(f"{table_name} line number {line_num} has {len(line_list)} elements!")
                 line_num += 1
 
 
