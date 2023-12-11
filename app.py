@@ -1,17 +1,17 @@
+import os
+
 from flask import Flask, send_file, render_template
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField
-import os
-import sqlite3
+
+from extract_data import extract_excel_file
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 app = Flask(__name__)
 
 app.config["SECRET_KEY"] = "LJg5vQJrbC9P9g"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(
-    basedir, "data.sqlite"
-)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(basedir, "data.sqlite")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 
@@ -37,15 +37,9 @@ def index():
         basedir = os.path.abspath(os.path.dirname(__file__))
 
         empty_str = ""
-        if (
-            acct is not empty_str
-            or street is not empty_str
-            or zip_code is not empty_str
-        ):
+        if (acct is not empty_str or street is not empty_str or zip_code is not empty_str):
             file_name = extract_excel_file(acct, street, zip_code)
-            return send_file(
-                os.path.join(basedir, "Exports", file_name), as_attachment=True
-            )
+            return send_file(os.path.join(basedir, "Exports", file_name), as_attachment=True)
 
     return render_template("index.html", form=form)
 
