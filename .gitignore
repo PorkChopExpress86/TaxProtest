@@ -1,5 +1,6 @@
 zipped_data/*
 text_files/*
+Exports/*
 venv
 database.sqlite
 Explore_data.ipynb
