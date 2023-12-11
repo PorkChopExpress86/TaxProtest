@@ -20,3 +20,5 @@ unzip -o zipped_data/Real_building_land.zip "building_res.txt" -d text_files
 
 # Run command to create the database files and tables
 python3.12 insert_data.py
+
+mkdir Exports
