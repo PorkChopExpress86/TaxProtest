@@ -34,12 +34,12 @@ def index():
         acct = form.acct.data
         street = form.street.data
         zip_code = form.zip_code.data
-        basedir = os.path.abspath(os.path.dirname(__file__))
+        base_dir = os.path.abspath(os.path.dirname(__file__))
 
         empty_str = ""
-        if (acct is not empty_str or street is not empty_str or zip_code is not empty_str):
+        if acct is not empty_str or street is not empty_str or zip_code is not empty_str:
             file_name = extract_excel_file(acct, street, zip_code)
-            return send_file(os.path.join(basedir, "Exports", file_name), as_attachment=True)
+            return send_file(os.path.join(base_dir, "Exports", file_name), as_attachment=True)
 
     return render_template("index.html", form=form)
 
