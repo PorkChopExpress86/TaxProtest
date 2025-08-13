@@ -22,6 +22,10 @@ venv/
 database.sqlite
 harris_county.db
 *.db
+secretkey.txt
+.env
+.env.*
+*.log
 
 # Python
 __pycache__/

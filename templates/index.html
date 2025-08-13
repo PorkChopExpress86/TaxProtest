@@ -15,9 +15,9 @@
 
     <div class="jumbotron bg-light p-4 rounded">
         <h1 class="display-4">Harris County Property Lookup</h1>
-        <p class="lead">Search for property information using account number, street name, or zip code.</p>
+    <p class="lead">Search for property information using account number, owner name, street name, or zip code.</p>
         <hr class="my-4">
-        <p>Enter at least one search criteria to download property data. The system will generate a CSV file with matching properties that you can open in Excel.</p>
+    <p>Enter at least one search criteria to download property data. The system will generate an Excel (.xlsx) file with matching properties that you can open in Excel.</p>
         
         <div class="accordion" id="hintsAccordion">
             <div class="accordion-item">
@@ -30,6 +30,7 @@
                     <div class="accordion-body">
                         <ul>
                             <li><strong>Account Number:</strong> Enter the first 5-6 digits to find properties in your area.</li>
+                            <li><strong>Owner Name:</strong> Enter part of the owner name (case-insensitive).</li>
                             <li><strong>Street Name:</strong> Enter partial street names. Combine with zip code for better results.</li>
                             <li><strong>Zip Code:</strong> Use alone to get all properties in an area, or combine with street name.</li>
                         </ul>
@@ -48,15 +49,19 @@
                 {{ form.hidden_tag() }}
                 
                 <div class="row">
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         {{ form.acct.label(class="form-label") }}
                         {{ form.acct(class="form-control") }}
                     </div>
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
+                        {{ form.owner.label(class="form-label") }}
+                        {{ form.owner(class="form-control") }}
+                    </div>
+                    <div class="col-md-3 mb-3">
                         {{ form.street.label(class="form-label") }}
                         {{ form.street(class="form-control") }}
                     </div>
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         {{ form.zip_code.label(class="form-label") }}
                         {{ form.zip_code(class="form-control") }}
                     </div>
@@ -84,7 +89,7 @@
         <div class="card-header d-flex justify-content-between align-items-center">
             <h4>Search Results ({{ results|length }} properties found)</h4>
             <a href="{{ url_for('download') }}" class="btn btn-success">
-                <i class="fas fa-download"></i> Download as CSV
+                <i class="fas fa-download"></i> Download as Excel
             </a>
         </div>
         <div class="card-body">
@@ -102,6 +107,7 @@
                             <th>Market Value</th>
                             <th>$/Sq Ft</th>
                             <th>Amenities</th>
+                            <th>Comparables</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -176,9 +182,16 @@
                                     <span class="text-muted">N/A</span>
                                 {% endif %}
                             </td>
+                            <td>
+                                {% if property['Account Number'] %}
+                                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('comparables', acct=property['Account Number']) }}">View</a>
+                                {% else %}
+                                    <span class="text-muted">N/A</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         <tr class="collapse" id="details{{ loop.index }}">
-                            <td colspan="10" class="bg-light">
+                            <td colspan="11" class="bg-light">
                                 <div class="row">
                                     <div class="col-md-4">
                                         <strong>Property Details:</strong><br>

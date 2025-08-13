@@ -85,8 +85,9 @@ TaxProtest/
 ├── extract_data.py        # SQLite database loader
 ├── requirements.txt       # Python dependencies
 ├── templates/
-│   ├── base.html         # Base template with Bootstrap 5
-│   └── index.html        # Search form interface
+│   ├── base.html          # Base template with Bootstrap 5
+│   ├── index.html         # Search form interface (now includes owner + comparables link)
+│   └── comparables.html   # Comparable properties view
 ├── static/
 │   └── style.css         # Custom styling
 ├── data/                 # SQLite database files
@@ -144,3 +145,25 @@ TaxProtest/
 - Bootstrap 5 for responsive UI
 
 The application is fully functional and ready for property searches! 🏠
+
+## Extended Features (In Progress)
+
+### Owner Name Search
+You can now enter part of an owner name (case-insensitive) to filter results. Combine with street or zip for narrower results.
+
+### Excel Export
+Results are exported as .xlsx when pandas/openpyxl are available. Fallback to CSV occurs automatically if pandas cannot load.
+
+### Comparable Property Finder
+Each result row includes a Comparables button that finds nearby properties within a distance/size tolerance using geospatial coordinates (if available). This depends on a populated `property_geo` table.
+
+### GIS / Coordinates Processing
+To enable distance-based comparables:
+1. Ensure `GIS_Public.zip` is downloaded (handled by `download_extract.py`).
+2. Extract files (handled automatically).
+3. Install extra dependencies (already added to `requirements.txt`): geopandas, shapely, fiona, pyproj, pandas.
+4. Run: `python scripts/process_gis_data.py` to create/update `property_geo` with latitude/longitude.
+5. Use the Comparables button in the UI.
+
+If coordinates are missing for the subject property, the comparables page will show no results.
+
