@@ -21,8 +21,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy data processing scripts
-COPY download_extract.py .
-COPY extract_data.py .
+COPY scripts/download_extract.py ./scripts/
+COPY scripts/extract_data.py ./scripts/
 
 # Create necessary directories
 RUN mkdir -p downloads extracted data text_files
@@ -52,20 +52,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY app.py .
-COPY extract_data.py .
-COPY download_extract.py .
-COPY docker_init.py .
-COPY run.py .
-COPY docker_run.py .
-COPY test_docker.py .
-COPY templates/ templates/
-COPY static/ static/
+COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY docker/ ./docker/
 
 # Copy enhancement scripts (optional)
-COPY add_property_ratings.py .
-COPY add_residential_estimates.py .
-COPY add_simple_ratings.py .
+# (These are now in the scripts directory)
 
 # Create necessary directories with proper permissions
 RUN mkdir -p data downloads extracted Exports logs text_files && \
@@ -79,7 +71,7 @@ USER appuser
 
 # Environment variables
 ENV PYTHONPATH=/app
-ENV FLASK_APP=app.py
+ENV FLASK_APP=app/app.py
 ENV FLASK_ENV=production
 
 # Expose port
@@ -90,4 +82,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:5000', timeout=5)" || exit 1
 
 # Default command
-CMD ["python", "docker_run.py"]
+CMD ["python", "docker/docker_run.py"]

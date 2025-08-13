@@ -14,9 +14,9 @@ services:
       - ./Exports:/app/Exports
       - ./logs:/app/logs
       # For development: mount source code
-      - ./app.py:/app/app.py
-      - ./templates:/app/templates
-      - ./static:/app/static
+      - ./app/app.py:/app/app/app.py
+      - ./app/templates:/app/app/templates
+      - ./app/static:/app/app/static
     restart: unless-stopped
     networks:
       - property-network
@@ -25,7 +25,7 @@ services:
   data-init:
     build: .
     container_name: property_data_init
-    command: ["python", "/app/docker_init.py"]
+    command: ["python", "/app/docker/docker_init.py"]
     volumes:
       - ./data:/app/data
       - ./downloads:/app/downloads

@@ -57,7 +57,7 @@ def main():
     
     # Import and configure the Flask app
     try:
-        from app import app
+        from app.app import app
         
         # Docker-specific configuration
         app.config.update(

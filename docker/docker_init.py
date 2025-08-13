@@ -40,12 +40,12 @@ def check_prerequisites():
     print("🔍 Checking prerequisites...")
     
     # Check if we're in the right directory
-    if not Path('/app/download_extract.py').exists():
-        print("❌ download_extract.py not found")
+    if not Path('/app/scripts/download_extract.py').exists():
+        print("❌ scripts/download_extract.py not found")
         return False
     
-    if not Path('/app/extract_data.py').exists():
-        print("❌ extract_data.py not found")
+    if not Path('/app/scripts/extract_data.py').exists():
+        print("❌ scripts/extract_data.py not found")
         return False
     
     # Create required directories
@@ -67,7 +67,7 @@ def main():
     
     # Step 1: Download data
     success = run_command(
-        "python /app/download_extract.py",
+        "python /app/scripts/download_extract.py",
         "Downloading Harris County data files"
     )
     
@@ -76,7 +76,7 @@ def main():
     
     # Step 2: Process data into SQLite
     success = run_command(
-        "python /app/extract_data.py",
+        "python /app/scripts/extract_data.py",
         "Processing data into SQLite database"
     )
     
@@ -95,7 +95,7 @@ def main():
     
     # Step 3: Add residential estimates (optional)
     success = run_command(
-        "python /app/add_residential_estimates.py",
+        "python /app/scripts/add_residential_estimates.py",
         "Adding residential feature estimates"
     )
     
@@ -104,7 +104,7 @@ def main():
     
     # Step 4: Add property ratings (optional)
     success = run_command(
-        "python /app/add_simple_ratings.py",
+        "python /app/scripts/add_simple_ratings.py",
         "Adding property rating system"
     )
     
