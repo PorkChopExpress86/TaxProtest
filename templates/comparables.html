@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-3">
+  <h2>Comparables for Account {{ acct }}</h2>
+  {% if subject %}
+  <div class="card mb-4">
+    <div class="card-header">Subject Property</div>
+    <div class="card-body">
+      <strong>{{ subject['Address'] or 'N/A' }}</strong><br>
+      Market Value: {% if subject['Market Value'] %}${{ "{:,.0f}".format(subject['Market Value']|float) }}{% else %}N/A{% endif %}<br>
+      Building Area: {% if subject['Building Area'] %}{{ "{:,.0f}".format(subject['Building Area']|float) }} sq ft{% else %}N/A{% endif %}<br>
+      Land Area: {% if subject['Land Area'] %}{{ "{:,.0f}".format(subject['Land Area']|float) }} sq ft{% else %}N/A{% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% if comparables %}
+  <div class="table-responsive">
+    <table class="table table-striped table-hover">
+      <thead class="table-dark">
+        <tr>
+          <th>Address</th>
+          <th>Distance (miles)</th>
+          <th>Market Value</th>
+          <th>$/Sq Ft</th>
+          <th>Building Area</th>
+          <th>Land Area</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in comparables %}
+        <tr>
+          <td>{{ c['Address'] }}</td>
+          <td>{{ c['Distance (miles)'] }}</td>
+          <td>{% if c['Market Value'] %}${{ "{:,.0f}".format(c['Market Value']|float) }}{% else %}N/A{% endif %}</td>
+          <td>{% if c['Price Per Sq Ft'] %}${{ "{:.2f}".format(c['Price Per Sq Ft']|float) }}{% else %}N/A{% endif %}</td>
+          <td>{% if c['Building Area'] %}{{ "{:,.0f}".format(c['Building Area']|float) }} sq ft{% else %}N/A{% endif %}</td>
+          <td>{% if c['Land Area'] %}{{ "{:,.0f}".format(c['Land Area']|float) }} sq ft{% else %}N/A{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p>No comparables found.</p>
+  {% endif %}
+  <a class="btn btn-secondary" href="{{ url_for('index') }}">Back</a>
+</div>
+{% endblock %}

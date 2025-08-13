@@ -8,7 +8,7 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, BooleanField
 from wtforms.validators import Optional
 
-from extract_data import extract_excel_file, search_properties
+from extract_data import extract_excel_file, search_properties, find_comparables
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 
@@ -18,11 +18,13 @@ app.config["SECRET_KEY"] = os.environ.get('SECRET_KEY', 'dev-key-change-in-produ
 
 
 class AccountForm(FlaskForm):
-    acct = StringField("Tax Account Number", validators=[Optional()], 
+    acct = StringField("Tax Account Number", validators=[Optional()],
                       render_kw={"placeholder": "Enter account number (optional)"})
-    street = StringField("Street Name", validators=[Optional()], 
+    owner = StringField("Owner Name", validators=[Optional()],
+                        render_kw={"placeholder": "Enter owner name (optional, partial OK)"})
+    street = StringField("Street Name", validators=[Optional()],
                         render_kw={"placeholder": "Enter street name (optional)"})
-    zip_code = StringField("Zip Code", validators=[Optional()], 
+    zip_code = StringField("Zip Code", validators=[Optional()],
                           render_kw={"placeholder": "Enter zip code (optional)"})
     exact_match = BooleanField("Exact street name match", default=False)
     submit = SubmitField("Search Properties")
@@ -51,23 +53,24 @@ def index():
 
     if form.validate_on_submit():
         acct = form.acct.data or ""
+        owner = form.owner.data or ""
         street = form.street.data or ""
         zip_code = form.zip_code.data or ""
         exact_match = form.exact_match.data
-        
+
         # At least one field must be provided
-        if not any([acct.strip(), street.strip(), zip_code.strip()]):
+        if not any([acct.strip(), owner.strip(), street.strip(), zip_code.strip()]):
             flash("Please enter at least one search criteria.", "warning")
             return render_template("index.html", form=form)
 
         try:
             # Search for properties and return results for display
-            results = search_properties(acct, street, zip_code, exact_match)
-            search_params = {'acct': acct, 'street': street, 'zip_code': zip_code, 'exact_match': exact_match}
+            results = search_properties(acct, street, zip_code, owner, exact_match)
+            search_params = {'acct': acct, 'owner': owner, 'street': street, 'zip_code': zip_code, 'exact_match': exact_match}
             
             # Debug: Log search parameters and results count
             match_type = "exact" if exact_match else "partial"
-            print(f"Search params - Account: '{acct}', Street: '{street}', Zip: '{zip_code}' (Match: {match_type})")
+            print(f"Search params - Account: '{acct}', Owner: '{owner}', Street: '{street}', Zip: '{zip_code}' (Match: {match_type})")
             print(f"Found {len(results)} results")
             if results:
                 print(f"First result: {results[0]}")
@@ -87,7 +90,7 @@ def index():
 
 @app.route("/download")
 def download():
-    """Download the last search results as CSV"""
+    """Download the last search results as Excel (.xlsx) or CSV fallback"""
     if 'last_search' not in session:
         flash("No search results to download. Please perform a search first.", "warning")
         return redirect(url_for('index'))
@@ -95,20 +98,29 @@ def download():
     try:
         params = session['last_search']
         exact_match = params.get('exact_match', False)
-        file_path = extract_excel_file(params['acct'], params['street'], params['zip_code'], exact_match)
-        
+        file_path = extract_excel_file(params.get('acct',''), params.get('street',''), params.get('zip_code',''), exact_match, params.get('owner',''))
+
         if not os.path.exists(file_path):
             flash("Error generating download file.", "error")
             return redirect(url_for('index'))
-        
-        # Schedule file deletion after download
+
         delete_file_later(file_path, delay_seconds=60)
-        
-        return send_file(file_path, as_attachment=True, 
-                       download_name=os.path.basename(file_path))
-        
+        return send_file(file_path, as_attachment=True, download_name=os.path.basename(file_path))
     except Exception as e:
-        flash(f"Error generating download: {str(e)}", "error")
+        flash(f"Error generating download: {e}", "error")
+        return redirect(url_for('index'))
+
+@app.route("/comparables/<acct>")
+def comparables(acct: str):
+    try:
+        comps = find_comparables(acct)
+        base = None
+        if comps:
+            subject_list = search_properties(acct)
+            base = subject_list[0] if subject_list else None
+        return render_template("comparables.html", acct=acct, subject=base, comparables=comps)
+    except Exception as e:
+        flash(f"Error finding comparables: {e}", "error")
         return redirect(url_for('index'))
 
 
