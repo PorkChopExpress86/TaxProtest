@@ -8,7 +8,7 @@ TEXT_DIR = BASE_DIR / "text_files"
 EXPORTS_DIR = BASE_DIR / "Exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
 
-DB_PATH = BASE_DIR / 'database.sqlite'
+DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
 
 
 def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbcs'):
@@ -98,7 +98,76 @@ def load_data_to_sqlite():
         conn.close()
 
 
-def extract_excel_file(account: str = "", street: str = "", zip_code: str = "") -> str:
+def search_properties(account: str = "", street: str = "", zip_code: str = "", exact_match: bool = False) -> list:
+    """Search for properties and return results as list of dictionaries"""
+    where_clauses = []
+    params = []
+
+    if account:
+        where_clauses.append("CAST(ra.acct AS TEXT) LIKE ?")
+        params.append(f"%{account.strip()}%")
+    if street:
+        # Clean and improve street search
+        street_clean = street.strip().upper()
+        if exact_match:
+            where_clauses.append("UPPER(ra.site_addr_1) = ?")
+            params.append(street_clean)
+        else:
+            where_clauses.append("UPPER(ra.site_addr_1) LIKE ?")
+            params.append(f"%{street_clean}%")
+    if zip_code:
+        where_clauses.append("ra.site_addr_3 LIKE ?")
+        params.append(f"%{zip_code.strip()}%")
+
+    where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    sql = f"""
+    SELECT ra.site_addr_1 AS 'Address',
+           ra.site_addr_3 AS 'Zip Code',
+           br.eff AS 'Build Year',
+           br.est_bedrooms AS 'Bedrooms',
+           br.est_bathrooms AS 'Bathrooms',
+           br.im_sq_ft AS 'Building Area',
+           ra.land_val AS 'Land Value',
+           ra.bld_val AS 'Building Value',
+           CAST(ra.acct AS TEXT) AS 'Account Number',
+           ra.tot_mkt_val AS 'Market Value',
+           CASE WHEN br.im_sq_ft IS NULL OR br.im_sq_ft = '' OR br.im_sq_ft = '0' THEN NULL
+                ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS 'Price Per Sq Ft',
+           ra.land_ar AS 'Land Area',
+           br.property_features AS 'Property Type',
+           br.est_amenities AS 'Estimated Amenities',
+           br.overall_rating AS 'Overall Rating',
+           br.quality_rating AS 'Quality Rating',
+           br.value_rating AS 'Value Rating',
+           br.rating_explanation AS 'Rating Explanation'
+    FROM real_acct AS ra
+    LEFT JOIN building_res AS br ON ra.acct = br.acct
+    {where_sql}
+    ORDER BY br.overall_rating DESC, ra.tot_mkt_val DESC
+    LIMIT 100;
+    """
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        columns = [description[0] for description in cursor.description]
+        
+        # Convert to list of dictionaries
+        results = []
+        for row in rows:
+            results.append(dict(zip(columns, row)))
+        
+        return results
+        
+    finally:
+        conn.close()
+
+
+def extract_excel_file(account: str = "", street: str = "", zip_code: str = "", exact_match: bool = False) -> str:
     """Export search results to CSV using built-in CSV writer"""
     where_clauses = []
     file_name_parts = []
@@ -109,9 +178,15 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "") 
         file_name_parts.append(account)
         params.append(f"%{account}%")
     if street:
-        where_clauses.append("ra.site_addr_1 LIKE ?")
-        file_name_parts.append(street)
-        params.append(f"%{street}%")
+        street_clean = street.strip().upper()
+        if exact_match:
+            where_clauses.append("UPPER(ra.site_addr_1) = ?")
+            file_name_parts.append(f"{street} (exact)")
+            params.append(street_clean)
+        else:
+            where_clauses.append("UPPER(ra.site_addr_1) LIKE ?")
+            file_name_parts.append(street)
+            params.append(f"%{street_clean}%")
     if zip_code:
         where_clauses.append("ra.site_addr_3 LIKE ?")
         file_name_parts.append(zip_code)
@@ -123,17 +198,26 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "") 
     SELECT ra.site_addr_1 AS 'Address',
            ra.site_addr_3 AS 'Zip Code',
            br.eff AS 'Build Year',
+           br.est_bedrooms AS 'Bedrooms',
+           br.est_bathrooms AS 'Bathrooms',
+           br.im_sq_ft AS 'Building Area',
            ra.land_val AS 'Land Value',
            ra.bld_val AS 'Building Value',
            CAST(ra.acct AS TEXT) AS 'Account Number',
            ra.tot_mkt_val AS 'Market Value',
-           br.im_sq_ft AS 'Building Area',
            CASE WHEN br.im_sq_ft IS NULL OR br.im_sq_ft = '' OR br.im_sq_ft = '0' THEN NULL
                 ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS 'Price Per Sq Ft',
-           ra.land_ar AS 'Land Area'
+           ra.land_ar AS 'Land Area',
+           br.property_features AS 'Property Type',
+           br.est_amenities AS 'Estimated Amenities',
+           br.overall_rating AS 'Overall Rating',
+           br.quality_rating AS 'Quality Rating',
+           br.value_rating AS 'Value Rating',
+           br.rating_explanation AS 'Rating Explanation'
     FROM real_acct AS ra
     LEFT JOIN building_res AS br ON ra.acct = br.acct
     {where_sql}
+    ORDER BY br.overall_rating DESC, ra.tot_mkt_val DESC
     LIMIT 5000;
     """
 
@@ -150,11 +234,33 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "") 
         rows = cursor.fetchall()
         columns = [description[0] for description in cursor.description]
         
+        # Format the data for CSV export
+        formatted_rows = []
+        price_per_sqft_index = None
+        
+        # Find the index of 'Price Per Sq Ft' column
+        for i, col in enumerate(columns):
+            if col == 'Price Per Sq Ft':
+                price_per_sqft_index = i
+                break
+        
+        # Format each row
+        for row in rows:
+            formatted_row = list(row)
+            # Format price per sq ft to 2 decimal places
+            if price_per_sqft_index is not None and formatted_row[price_per_sqft_index] is not None:
+                try:
+                    formatted_row[price_per_sqft_index] = f"{float(formatted_row[price_per_sqft_index]):.2f}"
+                except (ValueError, TypeError):
+                    # Keep original value if formatting fails
+                    pass
+            formatted_rows.append(formatted_row)
+        
         # Write to CSV 
         with open(out_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(columns)
-            writer.writerows(rows)
+            writer.writerows(formatted_rows)
             
     finally:
         conn.close()

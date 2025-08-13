@@ -1,6 +1,55 @@
+# Data directories (keep folders, ignore contents)
+downloads/*
+!downloads/.gitkeep
+extracted/*
+!extracted/.gitkeep
+data/*
+!data/.gitkeep
+Exports/*
+!Exports/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Legacy data directories
 zipped_data/*
 text_files/*
-Exports/*
-venv
+
+# Virtual environments
+venv/
+.venv/
+
+# Database files
 database.sqlite
+harris_county.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+*.ipynb_checkpoints/
 Explore_data.ipynb
+
+# Flask
+instance/
+.webassets-cache
