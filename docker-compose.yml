@@ -1,0 +1,68 @@
+services:
+  # Main Flask application
+  property-lookup:
+    build: .
+    container_name: harris_property_lookup
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-change-in-production}
+      - FLASK_ENV=${FLASK_ENV:-development}
+    volumes:
+      # Mount data directory for persistence
+      - ./data:/app/data
+      - ./Exports:/app/Exports
+      - ./logs:/app/logs
+      # For development: mount source code
+      - ./app.py:/app/app.py
+      - ./templates:/app/templates
+      - ./static:/app/static
+    restart: unless-stopped
+    networks:
+      - property-network
+
+  # Data initialization service (run once to setup database)
+  data-init:
+    build: .
+    container_name: property_data_init
+    command: |
+      sh -c "
+        echo 'Starting data download and processing...'
+        python download_extract.py
+        python extract_data.py
+        echo 'Adding enhanced features...'
+        python add_residential_estimates.py
+        python add_simple_ratings.py
+        echo 'Data initialization complete!'
+      "
+    volumes:
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+      - ./extracted:/app/extracted
+      - ./text_files:/app/text_files
+    profiles:
+      - init  # Only run when explicitly called
+    networks:
+      - property-network
+
+  # Optional: Database browser for SQLite
+  sqlite-browser:
+    image: coleifer/sqlite-web
+    container_name: property_db_browser
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    command: sqlite_web -H 0.0.0.0 -x /data/database.sqlite
+    profiles:
+      - tools  # Only run when explicitly called
+    networks:
+      - property-network
+
+networks:
+  property-network:
+    driver: bridge
+
+volumes:
+  property_data:
+    driver: local

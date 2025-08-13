@@ -46,6 +46,25 @@ A Flask-based web application that allows users to search Harris County property
 
 ## Quick Start
 
+### Option 1: Docker (Recommended)
+```bash
+# Clone and switch to Docker branch
+git clone https://github.com/PorkChopExpress86/TaxProtest.git
+cd TaxProtest
+git checkout docker-containerization
+
+# Quick start with interactive menu
+./docker-quickstart.sh          # Linux/Mac
+# or
+.\docker-quickstart.ps1         # Windows PowerShell
+
+# Manual Docker commands
+docker-compose --profile init up data-init    # Initialize data (first time)
+docker-compose up -d                          # Start application
+# Access at: http://localhost:5000
+```
+
+### Option 2: Native Installation
 ```bash
 # 1. Clone and setup environment
 git clone https://github.com/PorkChopExpress86/TaxProtest.git
@@ -63,6 +82,22 @@ python extract_data.py
 # 4. Run the Flask application
 python app.py
 # Access at: http://127.0.0.1:5000
+```
+
+## Docker Deployment
+
+For containerized deployment, see [DOCKER.md](DOCKER.md) for complete instructions.
+
+### Quick Docker Start
+```bash
+# Initialize data (first time only)
+docker-compose --profile init up data-init
+
+# Start application
+docker-compose up -d
+
+# Start with database browser
+docker-compose --profile tools up -d
 ```
 
 ## New Features ✨
