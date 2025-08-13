@@ -2,40 +2,78 @@
 
 {% block content %}
 
-    <div class="jumbotron">
-        <h1 class="display-4">Download Harris County Appraisal Data</h1>
-        <p class="lead">The data used here is pulled from HCAD's database once a day.</p>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="jumbotron bg-light p-4 rounded">
+        <h1 class="display-4">Harris County Property Lookup</h1>
+        <p class="lead">Search for property information using account number, street name, or zip code.</p>
         <hr class="my-4">
-        <p>Enter the data into the form to download data for your house and houses near you to compare the market, land
-            and improvement values. Enter your account number, full or partial, street name, or zip code and click
-            submit.</p>
-        <p>Hints:
-        <ul>
-            <li>Account Number: enter the first 5 or 6 numbers to get all houses very close by.</li>
-            <li>Street: To narrow the search to your street enter a space before and after your street. There may still be
-                another street in Harris county with your street name, so pair it with your zip code.
-            </li>
-            <li>Zip Code: pair it with your street name to ensure that ONLY your street is selected or get your entire
-                zip code!
-            </li>
-        </ul>
-        </p>
+        <p>Enter at least one search criteria to download property data. The system will generate a CSV file with matching properties that you can open in Excel.</p>
+        
+        <div class="accordion" id="hintsAccordion">
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="hintsHeading">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#hintsCollapse">
+                        Search Tips
+                    </button>
+                </h2>
+                <div id="hintsCollapse" class="accordion-collapse collapse" data-bs-parent="#hintsAccordion">
+                    <div class="accordion-body">
+                        <ul>
+                            <li><strong>Account Number:</strong> Enter the first 5-6 digits to find properties in your area.</li>
+                            <li><strong>Street Name:</strong> Enter partial street names. Combine with zip code for better results.</li>
+                            <li><strong>Zip Code:</strong> Use alone to get all properties in an area, or combine with street name.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <form method="POST" class="input-form">
-        <div class="container-fluid">
-            {{ form.hidden_tag() }}
-            {{ form.acct.label }} {{ form.acct(class="form-group", placeholder="Enter account number") }}
-            <br>
-            <br>
-            {{ form.street.label }} {{ form.street(class="form-group", placeholder="Street name") }}
-            <br>
-            <br>
-            {{ form.zip_code.label }} {{ form.zip_code(class="form-group", placeholder="Zip Code") }}
-            <br>
-            <br>
-            {{ form.submit() }}
+    <div class="card">
+        <div class="card-header">
+            <h3>Search Property Information</h3>
         </div>
-    </form>
+        <div class="card-body">
+            <form method="POST">
+                {{ form.hidden_tag() }}
+                
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        {{ form.acct.label(class="form-label") }}
+                        {{ form.acct(class="form-control") }}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        {{ form.street.label(class="form-label") }}
+                        {{ form.street(class="form-control") }}
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        {{ form.zip_code.label(class="form-label") }}
+                        {{ form.zip_code(class="form-control") }}
+                    </div>
+                </div>
+                
+                <div class="d-grid">
+                    {{ form.submit(class="btn btn-primary btn-lg") }}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <small class="text-muted">
+            <strong>Note:</strong> Downloaded files are automatically deleted from the server after 1 minute for privacy. 
+            Data is sourced from Harris County Appraisal District.
+        </small>
+    </div>
 
 {% endblock %}

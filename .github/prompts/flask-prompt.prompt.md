@@ -1,4 +1,6 @@
 ```prompt
+Don't just agree with what I say, please think about it and provide your insights. Think hard about the problem and potential issues and trade offs with solutions.
+
 Create a Flask-based property lookup tool with the following workflow:
 
 1. Download the property database export files from the official source (URL or FTP). Save them to a local directory.

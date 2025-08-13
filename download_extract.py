@@ -14,6 +14,10 @@ parent_path = Path(os.path.dirname(__file__))
 zip_data_path = os.path.join(parent_path, "zipped_data")
 text_data_path = os.path.join(parent_path, "text_files")
 
+# Ensure required directories exist
+os.makedirs(zip_data_path, exist_ok=True)
+os.makedirs(text_data_path, exist_ok=True)
+
 
 def remove_zipped_files():
     # remove files from Downloaded Data
@@ -28,15 +32,37 @@ def remove_zipped_files():
 def pycurl_download():
     year = datetime.now().strftime("%Y")
 
-    url_list = [f"https://download.hcad.org/data/CAMA/{year}/Real_building_land.zip",
-                f"https://download.hcad.org/data/CAMA/{year}/Real_acct_owner.zip"]
+    url_list = [
+        f"https://download.hcad.org/data/CAMA/{year}/Real_building_land.zip",
+        f"https://download.hcad.org/data/CAMA/{year}/Real_acct_owner.zip",
+        f"https://download.hcad.org/data/CAMA/{year}/Hearing_files.zip",
+        f"https://download.hcad.org/data/CAMA/{year}/Code_description_real.zip",
+        f"https://download.hcad.org/data/CAMA/{year}/PP_files.zip",
+        f"https://download.hcad.org/data/CAMA/{year}/Code_description_pp.zip",
+        "https://download.hcad.org/data/GIS/GIS_Public.zip"
+    ]
 
-    output_list = [f"{zip_data_path}/Real_building_land.zip", f"{zip_data_path}/Real_acct_owner.zip"]
+    output_list = [
+        f"{zip_data_path}/Real_building_land.zip",
+        f"{zip_data_path}/Real_acct_owner.zip",
+        f"{zip_data_path}/Hearing_files.zip",
+        f"{zip_data_path}/Code_description_real.zip",
+        f"{zip_data_path}/PP_files.zip",
+        f"{zip_data_path}/Code_description_pp.zip",
+        f"{zip_data_path}/GIS_Public.zip"
+    ]
 
-    response = requests.get(url_list[0], allow_redirects=True, verify=False)
-
-    with open("zipped_data/Real_acct_owner.zip", 'wb') as file:
-        file.write(response)
+    # Download both files with certificate verification enabled
+    for url, output_path in zip(url_list, output_list):
+        try:
+            resp = requests.get(url, allow_redirects=True)  # Default: verify=True
+            resp.raise_for_status()
+            with open(output_path, 'wb') as file:
+                file.write(resp.content)
+        except requests.exceptions.SSLError as ssl_err:
+            print(f"SSL error while downloading {url}: {ssl_err}")
+        except requests.exceptions.RequestException as req_err:
+            print(f"Request error while downloading {url}: {req_err}")
 
 
 def download_zip(year=datetime.now().strftime("%Y")):
@@ -65,9 +91,21 @@ def unzip_files(file, dest):
     dest= string of directory path, ex. 'Data/'
 
     """
-    file_list = ["building_res.txt", "real_acct.txt"]
+    file_list = [
+        "building_res.txt",
+    "land.txt",
+        "real_acct.txt",
+        "Hearing_files.txt",
+        "Code_description_real.txt",
+        "PP_files.txt",
+        "Code_description_pp.txt",
+        # GIS files may have different extensions, so extract all files if it's GIS_Public.zip
+    ]
 
-    with zf(file, "w") as zip_obj:
+    # Ensure destination directory exists
+    os.makedirs(dest, exist_ok=True)
+
+    with zf(file, "r") as zip_obj:
         list_of_file_names = zip_obj.namelist()
 
         for file_name in list_of_file_names:
@@ -83,5 +121,14 @@ if __name__ == "__main__":
 
     print("Extracting data...")
     # Extract files
-    unzip_files(os.path.join(zip_data_path, "Real_building_land.zip"), os.path.join(text_data_path, "real_acct.txt"))
-    unzip_files(os.path.join(zip_data_path, "Real_acct_owner.zip"), os.path.join(text_data_path, "building_res.txt"))
+    unzip_files(os.path.join(zip_data_path, "Real_building_land.zip"), text_data_path)
+    unzip_files(os.path.join(zip_data_path, "Real_acct_owner.zip"), text_data_path)
+    unzip_files(os.path.join(zip_data_path, "Hearing_files.zip"), text_data_path)
+    unzip_files(os.path.join(zip_data_path, "Code_description_real.zip"), text_data_path)
+    unzip_files(os.path.join(zip_data_path, "PP_files.zip"), text_data_path)
+    unzip_files(os.path.join(zip_data_path, "Code_description_pp.zip"), text_data_path)
+    # For GIS_Public.zip, extract all files (not just .txt)
+    gis_zip = os.path.join(zip_data_path, "GIS_Public.zip")
+    if os.path.exists(gis_zip):
+        with zf(gis_zip, "r") as zip_obj:
+            zip_obj.extractall(text_data_path)
