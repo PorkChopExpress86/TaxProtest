@@ -34,7 +34,8 @@ A Flask-based web application that allows users to search Harris County property
 - Flash message system for user feedback
 
 ### ✅ 4. Export & Download
-- Generates CSV files with property search results
+- Generates CSV files with property search results (default)
+- Optional Excel (.xlsx) export when pandas + openpyxl installed
 - Includes: Address, Zip Code, Build Year, Land/Building Values, Market Value, etc.
 - Calculates price per square foot automatically
 - Results limited to 5,000 records for performance
@@ -65,17 +66,16 @@ python app.py
 # Access at: http://127.0.0.1:5000
 ```
 
-## New Features ✨
+## Key Search Features ✨
 
-### ✅ Exact Match Search
-- **Checkbox Option**: Users can now choose between partial and exact street name matching
-- **Precise Results**: Exact match returns only properties with the complete address
-- **Flexible Search**: Partial match continues to work for broader searches
-
-### ✅ CSV Export Formatting
-- **Professional Output**: Price per square foot now formatted to exactly 2 decimal places
-- **Consistent Data**: All currency values maintain proper formatting standards
-- **Excel Compatible**: CSV files open cleanly in Excel with proper number formatting
+| Feature | Description |
+|---------|-------------|
+| Account Search | Partial account number matching |
+| Street Search | Partial or exact match (toggle) |
+| Owner Name Search | Case-insensitive partial match across owner name fields |
+| Zip Filter | Narrow results by zip code |
+| Price / Sq Ft | Calculated for each result when area present |
+| Comparables | Distance & size filtered list (requires GIS + coordinates) |
 
 ## File Structure
 ```
@@ -94,7 +94,7 @@ TaxProtest/
 │   └── database.sqlite   # Main property database
 ├── downloads/            # Downloaded ZIP files storage
 ├── extracted/            # Extracted data files
-├── Exports/              # Generated CSV files (auto-cleanup)
+├── Exports/              # Generated export files (auto-cleanup)
 ├── logs/                 # Application logs
 ├── text_files/           # Legacy: Extracted TSV data files  
 ├── zipped_data/          # Legacy: Downloaded ZIP files
@@ -139,31 +139,35 @@ TaxProtest/
 - **Encoding**: Handles Windows-1252/MBCS and UTF-8 encodings automatically
 
 ## Environment
-- Python 3.13.6 with virtual environment
-- Flask + Flask-WTF for web framework and forms
-- SQLite for database (no external dependencies)
+- Python 3.13+ (works on 3.12+)
+- Flask + Flask-WTF UI
+- SQLite (file-based, zero external server)
 - Bootstrap 5 for responsive UI
+- Optional: pandas + openpyxl (Excel export), geopandas stack (distance comparables)
 
 The application is fully functional and ready for property searches! 🏠
 
-## Extended Features (In Progress)
+## Optional: Excel Export
+Install extras:
+```
+pip install pandas openpyxl
+```
+The Download button will then produce an .xlsx file; otherwise it falls back to a CSV.
 
-### Owner Name Search
-You can now enter part of an owner name (case-insensitive) to filter results. Combine with street or zip for narrower results.
+## Optional: Distance-Based Comparables
+To enable geographic filtering (distance / size):
+```
+pip install -r requirements-geo.txt
+pip install pandas openpyxl   # if Excel export also desired
+python scripts/process_gis_data.py
+```
+This builds a `property_geo` table derived from the GIS shapefile. Without it, the Comparables page may show no results.
 
-### Excel Export
-Results are exported as .xlsx when pandas/openpyxl are available. Fallback to CSV occurs automatically if pandas cannot load.
+## Minimal Production Notes
+- Set `SECRET_KEY` environment variable.
+- Run behind a production WSGI server (e.g. gunicorn) if deploying beyond local usage.
+- Schedule periodic data refresh by re-running `download_extract.py` + `extract_data.py`.
 
-### Comparable Property Finder
-Each result row includes a Comparables button that finds nearby properties within a distance/size tolerance using geospatial coordinates (if available). This depends on a populated `property_geo` table.
-
-### GIS / Coordinates Processing
-To enable distance-based comparables:
-1. Ensure `GIS_Public.zip` is downloaded (handled by `download_extract.py`).
-2. Extract files (handled automatically).
-3. Install extra dependencies (already added to `requirements.txt`): geopandas, shapely, fiona, pyproj, pandas.
-4. Run: `python scripts/process_gis_data.py` to create/update `property_geo` with latitude/longitude.
-5. Use the Comparables button in the UI.
-
-If coordinates are missing for the subject property, the comparables page will show no results.
+## License / Data Source
+Data originates from Harris County Appraisal District public data. Review their usage policies before redistribution.
 
