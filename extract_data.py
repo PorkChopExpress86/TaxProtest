@@ -11,7 +11,7 @@ EXPORTS_DIR.mkdir(exist_ok=True)
 DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
 
 
-def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbcs'):
+def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='utf-8'):
     """Create table schema by reading first few rows of CSV"""
     try:
         with open(csv_path, 'r', encoding=encoding, newline='') as f:
@@ -31,12 +31,18 @@ def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbc
         
         return clean_headers
     except UnicodeDecodeError:
-        if encoding != 'utf-8':
-            return create_table_from_csv(cursor, table_name, csv_path, encoding='utf-8')
-        raise
+        # Try cp1252 (Windows encoding) for Docker containers instead of mbcs
+        if encoding == 'utf-8':
+            print(f"UTF-8 failed for {csv_path}, trying cp1252...")
+            return create_table_from_csv(cursor, table_name, csv_path, encoding='cp1252')
+        elif encoding == 'cp1252':
+            print(f"cp1252 failed for {csv_path}, trying latin-1...")
+            return create_table_from_csv(cursor, table_name, csv_path, encoding='latin-1')
+        else:
+            raise
 
 
-def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, encoding='mbcs', batch_size=10000):
+def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, encoding='utf-8', batch_size=10000):
     """Load CSV data into SQLite table in batches"""
     # Increase CSV field size limit
     csv.field_size_limit(1000000)
@@ -65,8 +71,13 @@ def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, en
                 print(f"  inserted final batch of {len(batch)} rows")
                 
     except UnicodeDecodeError:
-        if encoding != 'utf-8':
-            load_csv_to_table(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
+        # Try cp1252 for Docker containers instead of mbcs
+        if encoding == 'utf-8':
+            print(f"UTF-8 failed for {csv_path}, trying cp1252...")
+            load_csv_to_table(cursor, table_name, csv_path, headers, encoding='cp1252', batch_size=batch_size)
+        elif encoding == 'cp1252':
+            print(f"cp1252 failed for {csv_path}, trying latin-1...")
+            load_csv_to_table(cursor, table_name, csv_path, headers, encoding='latin-1', batch_size=batch_size)
         else:
             raise
 

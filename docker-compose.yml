@@ -25,16 +25,7 @@ services:
   data-init:
     build: .
     container_name: property_data_init
-    command: |
-      sh -c "
-        echo 'Starting data download and processing...'
-        python download_extract.py
-        python extract_data.py
-        echo 'Adding enhanced features...'
-        python add_residential_estimates.py
-        python add_simple_ratings.py
-        echo 'Data initialization complete!'
-      "
+    command: ["python", "/app/docker_init.py"]
     volumes:
       - ./data:/app/data
       - ./downloads:/app/downloads

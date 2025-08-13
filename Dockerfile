@@ -54,6 +54,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY app.py .
 COPY extract_data.py .
+COPY download_extract.py .
+COPY docker_init.py .
 COPY run.py .
 COPY docker_run.py .
 COPY test_docker.py .
