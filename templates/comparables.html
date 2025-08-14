@@ -30,7 +30,7 @@
         {% for c in comparables %}
         <tr>
           <td>{{ c['Address'] }}</td>
-          <td>{{ c['Distance (miles)'] }}</td>
+          <td>{{ c['Distance Miles'] }}</td>
           <td>{% if c['Market Value'] %}${{ "{:,.0f}".format(c['Market Value']|float) }}{% else %}N/A{% endif %}</td>
           <td>{% if c['Price Per Sq Ft'] %}${{ "{:.2f}".format(c['Price Per Sq Ft']|float) }}{% else %}N/A{% endif %}</td>
           <td>{% if c['Building Area'] %}{{ "{:,.0f}".format(c['Building Area']|float) }} sq ft{% else %}N/A{% endif %}</td>
