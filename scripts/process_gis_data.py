@@ -31,13 +31,14 @@ except ImportError as e:  # pragma: no cover
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEXT_DIR = BASE_DIR / "text_files"
+GIS_EXPORT_DIR = BASE_DIR / "Exports" / "GIS"
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "database.sqlite"
 
 def find_shapefile() -> Optional[Path]:
-    candidates = list(TEXT_DIR.rglob("*.shp"))
+    candidates = list(TEXT_DIR.rglob("*.shp")) + list(GIS_EXPORT_DIR.rglob("*.shp"))
     if not candidates:
-        print("No shapefile found under text_files/. Ensure GIS_Public.zip was extracted.")
+        print("No shapefile found under text_files/ or Exports/GIS/. Run extract_gis_nested.py.")
         return None
     shp = max(candidates, key=lambda p: p.stat().st_size)
     print(f"Using shapefile: {shp}")
@@ -49,7 +50,13 @@ def load_geodata(shp: Path):
     return gdf
 
 def choose_account_column(gdf) -> Optional[str]:
-    preferred = ["acct", "account", "ACCOUNT", "ACCT", "prop_id", "propid", "PROP_ID", "OBJECTID"]
+    # Extended list includes common parcel identifiers used by HCAD GIS datasets
+    preferred = [
+        "acct", "account", "ACCOUNT", "ACCT",
+        "prop_id", "propid", "PROP_ID",
+        "parcelid", "ParcelID", "PARCELID", "parcel_id", "Parcel_ID",
+        "OBJECTID"
+    ]
     lower_map = {c.lower(): c for c in gdf.columns}
     for cand in preferred:
         if cand.lower() in lower_map:

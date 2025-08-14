@@ -93,8 +93,9 @@ def unzip_files(file, dest):
     """
     file_list = [
         "building_res.txt",
-    "land.txt",
+        "land.txt",
         "real_acct.txt",
+    "owners.txt",
         "Hearing_files.txt",
         "Code_description_real.txt",
         "PP_files.txt",

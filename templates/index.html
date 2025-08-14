@@ -7,7 +7,7 @@
             {% for category, message in messages %}
                 <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
                     {{ message }}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
             {% endfor %}
         {% endif %}
@@ -98,6 +98,7 @@
                     <thead class="table-dark">
                         <tr>
                             <th>Address <button class="btn btn-sm btn-outline-light ms-2" type="button" onclick="toggleAllDetails()">Show Details</button></th>
+                            <th>Owner</th>
                             <th>Zip Code</th>
                             <th>Rating</th>
                             <th>Bedrooms</th>
@@ -114,6 +115,13 @@
                         {% for property in results %}
                         <tr>
                             <td><strong>{{ property['Address'] or 'N/A' }}</strong></td>
+                            <td>
+                                {% if property['Owner Name'] %}
+                                    <small class="text-dark">{{ property['Owner Name'] }}</small>
+                                {% else %}
+                                    <span class="text-muted">N/A</span>
+                                {% endif %}
+                            </td>
                             <td>{{ property['Zip Code'] or 'N/A' }}</td>
                             <td>
                                 {% if property['Overall Rating'] %}
@@ -191,14 +199,15 @@
                             </td>
                         </tr>
                         <tr class="collapse" id="details{{ loop.index }}">
-                            <td colspan="11" class="bg-light">
+                            <td colspan="12" class="bg-light">
                                 <div class="row">
                                     <div class="col-md-4">
                                         <strong>Property Details:</strong><br>
                                         <small>
                                             Built: {{ property['Build Year'] or 'N/A' }}<br>
                                             Land Area: {{ "{:,.0f}".format(property['Land Area']|float) if property['Land Area'] else 'N/A' }} sq ft<br>
-                                            Property Type: {{ property['Property Type'] or 'N/A' }}
+                                            Property Type: {{ property['Property Type'] or 'N/A' }}<br>
+                                            Owner: {{ property['Owner Name'] or 'N/A' }}
                                         </small>
                                     </div>
                                     <div class="col-md-4">
