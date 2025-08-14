@@ -571,7 +571,7 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
     LEFT JOIN property_derived pd ON ra.acct = pd.acct
     {geo_join}
     {where_sql}
-    ORDER BY ra.tot_mkt_val DESC
+    ORDER BY ra.site_addr_1 ASC
     LIMIT 100;"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
