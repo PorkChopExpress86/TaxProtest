@@ -1296,6 +1296,80 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "", 
     return str(out_path)
 
 
+def export_comparables(subject_account: str,
+                       max_comps: int = 25,
+                       min_comps: int = 20,
+                       radius_first_strict: bool = False,
+                       max_radius: float | None = None,
+                       file_format: str = 'xlsx') -> str:
+    """Generate an export file (Excel or CSV) for the current comparables set.
+
+    Returns path to created file.
+    """
+    res = find_comps(subject_account,
+                     max_comps=max_comps,
+                     min_comps=min_comps,
+                     radius_first_strict=radius_first_strict,
+                     max_radius=max_radius)
+    subject = res.get('subject') or {}
+    comps = res.get('comps', [])
+    meta = res.get('meta', {})
+    rows = []
+    for c in comps:
+        rows.append({
+            'Account': c.get('acct'),
+            'Score': c.get('score'),
+            'Address': f"{c.get('site_addr_1','')} {c.get('site_addr_3','')}".strip(),
+            'Market Value': c.get('market_value'),
+            'Building Area': c.get('building_area'),
+            'Land Area': c.get('land_area'),
+            'PPSF': c.get('ppsf'),
+            'Year': c.get('build_year'),
+            'Bedrooms': c.get('bedrooms'),
+            'Bathrooms': c.get('bathrooms'),
+            'Stories': c.get('stories'),
+            'Pool': c.get('has_pool'),
+            'Garage': c.get('has_garage'),
+            'Distance (mi)': c.get('distance_miles'),
+            'Amenities': c.get('amenities'),
+        })
+    # File name with subject acct and geo tier
+    geo_tag = meta.get('geo_tier') or 'geo'
+    fname = f"comparables_{subject_account}_{geo_tag}.{ 'csv' if file_format=='csv' else 'xlsx'}"
+    out_path = EXPORTS_DIR / fname
+    if file_format == 'csv':
+        with open(out_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            headers = list(rows[0].keys()) if rows else []
+            writer.writerow(headers)
+            for r in rows:
+                writer.writerow([r.get(h) for h in headers])
+        return str(out_path)
+    # Excel attempt
+    try:
+        import pandas as pd  # type: ignore
+        df = pd.DataFrame(rows)
+        # Meta summary sheet: convert dict -> simple key/value
+        meta_df = pd.DataFrame([(k, str(v)) for k,v in meta.items()], columns=['Metric','Value'])
+        with pd.ExcelWriter(out_path, engine='openpyxl') as writer:  # type: ignore
+            df.to_excel(writer, index=False, sheet_name='Comparables')
+            meta_df.to_excel(writer, index=False, sheet_name='Meta')
+            if subject:
+                subj_df = pd.DataFrame([(k, str(v)) for k,v in subject.items()], columns=['Field','Value'])
+                subj_df.to_excel(writer, index=False, sheet_name='Subject')
+        return str(out_path)
+    except Exception:
+        # Fallback to CSV
+        csv_path = out_path.with_suffix('.csv')
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            headers = list(rows[0].keys()) if rows else []
+            writer.writerow(headers)
+            for r in rows:
+                writer.writerow([r.get(h) for h in headers])
+        return str(csv_path)
+
+
 if __name__ == "__main__":
     # Optional sampling for quicker test runs: set env FAST_LOAD_ROWS to an int
     fast_rows = os.getenv("FAST_LOAD_ROWS")

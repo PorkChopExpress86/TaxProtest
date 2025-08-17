@@ -9,7 +9,7 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, BooleanField
 from wtforms.validators import Optional
 
-from extract_data import extract_excel_file, search_properties, find_comparables, find_comps
+from extract_data import extract_excel_file, search_properties, find_comparables, find_comps, export_comparables
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 
@@ -207,6 +207,38 @@ def comparables(acct: str):
     except Exception as e:
         flash(f"Error finding comparables: {e}", "error")
         return redirect(url_for('index'))
+
+
+@app.route("/comparables/<acct>/export")
+def export_comparables_route(acct: str):
+    fmt = request.args.get('fmt','xlsx').lower()
+    if fmt not in ('xlsx','csv'):
+        fmt = 'xlsx'
+    try:
+        # Mirror query params used in comparables route
+        max_comps = int(request.args.get('max','25')) if request.args.get('max') else 25
+        min_comps = int(request.args.get('min','20')) if request.args.get('min') else 20
+        if min_comps > max_comps: min_comps = max_comps
+        max_radius_arg = request.args.get('max_radius')
+        try:
+            max_radius_f = float(max_radius_arg) if max_radius_arg not in (None,'') else None
+        except ValueError:
+            max_radius_f = None
+        radius_first_strict = request.args.get('strict_first','0') in {'1','true','True'}
+        fpath = export_comparables(acct,
+                                   max_comps=max_comps,
+                                   min_comps=min_comps,
+                                   radius_first_strict=radius_first_strict,
+                                   max_radius=max_radius_f,
+                                   file_format=fmt)
+        if not os.path.exists(fpath):
+            flash('Export failed to create file','error')
+            return redirect(url_for('comparables', acct=acct))
+        delete_file_later(fpath, delay_seconds=120)
+        return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+    except Exception as e:
+        flash(f'Error exporting comparables: {e}','error')
+        return redirect(url_for('comparables', acct=acct))
 
 
 if __name__ == "__main__":
