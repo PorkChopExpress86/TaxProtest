@@ -9,7 +9,8 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, BooleanField
 from wtforms.validators import Optional
 
-from extract_data import extract_excel_file, search_properties, find_comparables, find_comps, export_comparables
+from extract_data import extract_excel_file, search_properties, find_comparables
+from comparables import find_comps, export_comparables
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 
