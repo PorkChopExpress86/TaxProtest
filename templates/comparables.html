@@ -65,6 +65,39 @@
   </div>
 </div>
 
+{% if meta.pricing_stats %}
+<div class="row mb-3">
+  <div class="col-lg-10 mx-auto">
+    <div class="card small">
+      <div class="card-header bg-info text-white">Pricing Summary</div>
+      <div class="card-body">
+        {% set ps = meta.pricing_stats %}
+        <div class="row">
+          <div class="col-md-6">
+            <strong>Market Value (n={{ ps.value_stats.count if ps.value_stats }})</strong><br/>
+            Median: {{ ps.value_stats.median if ps.value_stats }} &nbsp; Mean: {{ ps.value_stats.mean if ps.value_stats }}<br/>
+            Min/Max: {{ ps.value_stats.min if ps.value_stats }}/{{ ps.value_stats.max if ps.value_stats }} &nbsp; IQR: {{ ps.value_stats.iqr if ps.value_stats }}<br/>
+            Subject Δ vs Median: {{ ps.subject_vs_value.diff_vs_median if ps.subject_vs_value }} ({{ ps.subject_vs_value.pct_vs_median if ps.subject_vs_value }}%)
+          </div>
+          <div class="col-md-6">
+            <strong>PPSF (n={{ ps.ppsf_stats.count if ps.ppsf_stats }})</strong><br/>
+            Median: {{ ps.ppsf_stats.median if ps.ppsf_stats }} &nbsp; Mean: {{ ps.ppsf_stats.mean if ps.ppsf_stats }}<br/>
+            Min/Max: {{ ps.ppsf_stats.min if ps.ppsf_stats }}/{{ ps.ppsf_stats.max if ps.ppsf_stats }} &nbsp; IQR: {{ ps.ppsf_stats.iqr if ps.ppsf_stats }}<br/>
+            Subject Δ vs Median: {{ ps.subject_vs_ppsf.diff_vs_median if ps.subject_vs_ppsf }} ({{ ps.subject_vs_ppsf.pct_vs_median if ps.subject_vs_ppsf }}%)<br/>
+            Within ±10% of Subject: {{ ps.ppsf_band_counts.within_10pct if ps.ppsf_band_counts }}/{{ ps.ppsf_stats.count if ps.ppsf_stats }} comps
+          </div>
+        </div>
+        <div class="mt-2 small text-muted">
+          {% if ps.pool_match_rate %}Pool match rate: {{ ps.pool_match_rate }}% &nbsp;{% endif %}
+          {% if ps.garage_match_rate %}Garage match rate: {{ ps.garage_match_rate }}% &nbsp;{% endif %}
+          {% if ps.trimmed_ppsf_median %}Trimmed PPSF Median: {{ ps.trimmed_ppsf_median }}{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if subject %}
 <div class="row mb-4">
   <div class="col-lg-10 mx-auto">

@@ -6,12 +6,83 @@ import sqlite3
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 TEXT_DIR = BASE_DIR / "text_files"
 EXPORTS_DIR = BASE_DIR / "Exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
+
+def compute_pricing_stats(subject: Dict, comps: List[Dict]) -> Dict:
+    """Compute pricing & PPSF statistics and subject positioning.
+
+    Returns a dict with keys: counts, value_stats, ppsf_stats, subject_vs, bands, dispersion, match_rates.
+    """
+    import math
+    stats: Dict[str, Any] = {}
+    values = [float(c['market_value']) for c in comps if c.get('market_value') not in (None,'','0')]
+    ppsf_list = [float(c['ppsf']) for c in comps if c.get('ppsf') not in (None,'','0')]
+    def basic(series: List[float]) -> Dict:
+        if not series:
+            return {'count':0}
+        s = sorted(series)
+        n = len(s)
+        mean = sum(s)/n
+        med = s[n//2] if n%2==1 else (s[n//2-1]+s[n//2])/2
+        q1 = s[int(0.25*(n-1))]
+        q3 = s[int(0.75*(n-1))]
+        iqr = q3 - q1
+        rng = s[-1] - s[0]
+        var = sum((x-mean)**2 for x in s)/n if n>0 else 0
+        std = math.sqrt(var)
+        cv = (std/mean) if mean else None
+        return {
+            'count': n,'mean': round(mean,2),'median': round(med,2),'min': round(s[0],2),'max': round(s[-1],2),
+            'q1': round(q1,2),'q3': round(q3,2),'iqr': round(iqr,2),'range': round(rng,2),
+            'std': round(std,2),'cv': round(cv,3) if cv is not None else None
+        }
+    stats['value_stats'] = basic(values)
+    stats['ppsf_stats'] = basic(ppsf_list)
+    # Subject comparisons
+    subj_val = subject.get('market_value')
+    subj_ppsf = subject.get('ppsf')
+    def subj_vs(val, base):
+        if val is None or not base or base.get('count',0)==0:
+            return {}
+        out={}
+        for k in ['mean','median']:
+            if base.get(k):
+                out[f'diff_vs_{k}'] = round(float(val)-base[k],2)
+                out[f'pct_vs_{k}'] = round(((float(val)-base[k])/base[k])*100,2) if base[k] else None
+        return out
+    stats['subject_vs_value'] = subj_vs(subj_val, stats['value_stats'])
+    stats['subject_vs_ppsf'] = subj_vs(subj_ppsf, stats['ppsf_stats'])
+    # Bands around subject PPSF
+    if subj_ppsf and ppsf_list:
+        subj_ppsf_f = float(subj_ppsf)
+        def within(pct):
+            lo=subj_ppsf_f*(1-pct); hi=subj_ppsf_f*(1+pct)
+            return sum(1 for x in ppsf_list if lo<=x<=hi)
+        stats['ppsf_band_counts'] = {
+            'within_5pct': within(0.05),
+            'within_10pct': within(0.10),
+            'within_15pct': within(0.15)
+        }
+    # Match rates
+    pools = [c.get('has_pool') for c in comps if c.get('has_pool') in (0,1)]
+    garages = [c.get('has_garage') for c in comps if c.get('has_garage') in (0,1)]
+    if pools and subject.get('has_pool') in (0,1):
+        stats['pool_match_rate'] = round( sum(1 for p in pools if int(p)==int(subject['has_pool'])) / len(pools) *100 ,2)
+    if garages and subject.get('has_garage') in (0,1):
+        stats['garage_match_rate'] = round( sum(1 for g in garages if int(g)==int(subject['has_garage'])) / len(garages) *100 ,2)
+    # Outlier trimming for PPSF (IQR rule)
+    if stats['ppsf_stats'].get('count',0) >= 4:
+        q1=stats['ppsf_stats']['q1']; q3=stats['ppsf_stats']['q3']; iqr=stats['ppsf_stats']['iqr']
+        lo=q1-1.5*iqr; hi=q3+1.5*iqr
+        trimmed=[x for x in ppsf_list if lo<=x<=hi]
+        if trimmed and trimmed!=ppsf_list:
+            stats['trimmed_ppsf_median'] = basic(trimmed)['median']
+    return stats
 EXTRACTED_DIR = BASE_DIR / "extracted"
 
 DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
@@ -929,6 +1000,8 @@ def find_comps(subject_account: str,
                             relaxed[k] = (chosen_meta.get(k) != v)
                         except: relaxed[k] = None
                     chosen_meta['relaxed'] = relaxed
+                    # Pricing stats
+                    chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
                     return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
             # Continue to full relaxation search if strict radius-first failed
         for geo_label, radius_val, producer in geo_sequences:
@@ -1053,6 +1126,7 @@ def find_comps(subject_account: str,
                                                     relaxed[k] = (chosen_meta.get(k) != v)
                                                 except: relaxed[k] = None
                                             chosen_meta['relaxed'] = relaxed
+                                            chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
                                             return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
                                             # end if len(selected) >= min_comps
         chosen_meta['attempts'] = attempts
@@ -1064,6 +1138,7 @@ def find_comps(subject_account: str,
                 relaxed[k] = (chosen_meta.get(k) is not None and chosen_meta.get(k) != v)
             except: relaxed[k] = None
         chosen_meta['relaxed'] = relaxed
+        chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
         return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
     finally:
         cur.close(); conn.close()
@@ -1357,6 +1432,16 @@ def export_comparables(subject_account: str,
             if subject:
                 subj_df = pd.DataFrame([(k, str(v)) for k,v in subject.items()], columns=['Field','Value'])
                 subj_df.to_excel(writer, index=False, sheet_name='Subject')
+            pricing = meta.get('pricing_stats')
+            if isinstance(pricing, dict) and pricing:
+                flat = []
+                for section_key, section_val in pricing.items():
+                    if isinstance(section_val, dict):
+                        for k,v in section_val.items():
+                            flat.append((f"{section_key}.{k}", v))
+                    else:
+                        flat.append((section_key, section_val))
+                pd.DataFrame(flat, columns=['Metric','Value']).to_excel(writer, index=False, sheet_name='PricingStats')
         return str(out_path)
     except Exception:
         # Fallback to CSV
