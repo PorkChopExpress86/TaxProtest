@@ -1,3 +1,4 @@
+import pandas as pd
 import os
 import csv
 import math
@@ -42,9 +43,39 @@ def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbc
 
 
 def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, encoding='mbcs', batch_size=10000):
-    """Load CSV data into SQLite table in batches"""
+    """Load CSV data into SQLite table in batches using pandas for robustness."""
+    try:
+        # Use pandas to read the tab-separated file, treat all columns as strings to avoid type errors
+        df = pd.read_csv(csv_path, sep='\t', header=0, names=headers, encoding=encoding, on_bad_lines='warn', low_memory=False, dtype=str)
+        
+        # Clean up column names if they were not provided
+        df.columns = [(''.join(c if c.isalnum() else '_' for c in h)) for h in df.columns]
+        
+        # Trim whitespace from all string columns
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].str.strip()
+
+        # Write the data to the SQLite table
+        df.to_sql(table_name, cursor.connection, if_exists='replace', index=False, chunksize=batch_size)
+        print(f"  inserted {len(df)} rows into {table_name}")
+
+    except UnicodeDecodeError:
+        if encoding != 'utf-8':
+            load_csv_to_table(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
+        else:
+            raise
+    except Exception as e:
+        print(f"  Could not load {csv_path} into {table_name} using pandas. Error: {e}")
+        # Fallback to original implementation if pandas fails
+        _load_csv_to_table_original(cursor, table_name, csv_path, headers, encoding, batch_size)
+
+def _load_csv_to_table_original(cursor, table_name: str, csv_path: Path, headers: list, encoding='mbcs', batch_size=10000):
+    """Original implementation for loading CSV data into SQLite table in batches"""
     # Increase CSV field size limit
-    csv.field_size_limit(1000000)
+    try:
+        csv.field_size_limit(10_000_000)
+    except Exception:
+        pass
     
     try:
         with open(csv_path, 'r', encoding=encoding, newline='') as f:
@@ -53,8 +84,14 @@ def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, en
             
             batch = []
             for row_num, row in enumerate(reader, 1):
-                # Pad or truncate row to match headers
                 normalized_row = row[:len(headers)] + [''] * (len(headers) - len(row))
+                acct_indices = [i for i, h in enumerate(headers) if h.lower() == 'acct']
+                if acct_indices:
+                    ai = acct_indices[0]
+                    try:
+                        normalized_row[ai] = normalized_row[ai].strip()
+                    except Exception:
+                        pass
                 batch.append(normalized_row)
                 
                 if len(batch) >= batch_size:
@@ -63,15 +100,20 @@ def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, en
                     print(f"  inserted batch ending at row {row_num}")
                     batch = []
             
-            # Insert remaining rows
             if batch:
                 placeholders = ', '.join(['?' for _ in headers])
                 cursor.executemany(f'INSERT INTO {table_name} VALUES ({placeholders})', batch)
                 print(f"  inserted final batch of {len(batch)} rows")
+                acct_indices = [i for i, h in enumerate(headers) if h.lower() == 'acct']
+                if acct_indices:
+                    try:
+                        cursor.execute(f"UPDATE {table_name} SET acct = TRIM(acct) WHERE acct IS NOT NULL")
+                    except Exception:
+                        pass
                 
     except UnicodeDecodeError:
         if encoding != 'utf-8':
-            load_csv_to_table(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
+            _load_csv_to_table_original(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
         else:
             raise
 
@@ -82,421 +124,210 @@ def load_data_to_sqlite():
         "real_acct": TEXT_DIR / "real_acct.txt",
         # Note: land.txt doesn't seem to be extracted, so we'll skip it for now
     }
-    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     try:
+        # (Rewritten implementation) Load core tables
         for table, path in files.items():
             if not path.exists():
                 print(f"Skip {table}: file not found at {path}")
                 continue
             print(f"Loading {table} from {path} ...")
-            
             headers = create_table_from_csv(cursor, table, path)
             load_csv_to_table(cursor, table, path, headers)
-            
-        conn.commit()
-        print("All available files loaded into SQLite.")
+        conn.commit(); print("All available files loaded into SQLite.")
 
-        # Load owners.txt if present
-        owners_path = TEXT_DIR / "owners.txt"
+        # Owners
+        owners_path = TEXT_DIR / 'owners.txt'
         if owners_path.exists():
-            print(f"Loading owners from {owners_path} ...")
+            print("Loading owners ...")
             cursor.execute("DROP TABLE IF EXISTS owners")
             cursor.execute("CREATE TABLE owners (acct TEXT, ln_num TEXT, name TEXT, aka TEXT, pct_own TEXT)")
-            with open(owners_path, 'r', encoding='utf-8', errors='ignore') as f:
-                header = f.readline()  # skip header
-                batch = []
-                for i, line in enumerate(f, 1):
-                    parts = line.rstrip('\n').split('\t')
-                    if len(parts) < 5:
-                        parts.extend([''] * (5 - len(parts)))
-                    acct, ln_num, name, aka, pct_own = [p.strip() for p in parts[:5]]
-                    batch.append((acct, ln_num, name, aka, pct_own))
-                    if len(batch) >= 10000:
-                        cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch)
-                        batch.clear()
-                if batch:
-                    cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch)
+            with open(owners_path,'r',encoding='utf-8',errors='ignore') as f:
+                f.readline()
+                batch=[]
+                for line in f:
+                    parts=line.rstrip('\n').split('\t'); parts+=['']*(5-len(parts))
+                    batch.append(tuple(p.strip() for p in parts[:5]))
+                    if len(batch)>=10000:
+                        cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch); batch.clear()
+                if batch: cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch)
             conn.commit()
-            cursor.execute('SELECT COUNT(1) FROM owners')
-            print(f"Loaded {cursor.fetchone()[0]} owner rows.")
         else:
-            # Ensure empty owners table exists so LEFT JOIN does not fail
             cursor.execute("CREATE TABLE IF NOT EXISTS owners (acct TEXT, ln_num TEXT, name TEXT, aka TEXT, pct_own TEXT)")
             conn.commit()
-            print("owners.txt not found; created empty owners table.")
 
-        # Load descriptor files for quality code and land use (if present)
-        def load_descriptor(filename: str, table: str, expected_cols: int = 2):
+        # Descriptors helper
+        def load_descriptor(filename, table):
             for base in (TEXT_DIR, EXTRACTED_DIR):
-                p = base / filename
+                p = base/filename
                 if p.exists():
                     try:
                         cursor.execute(f"DROP TABLE IF EXISTS {table}")
                         cursor.execute(f"CREATE TABLE {table} (col1 TEXT, col2 TEXT, col3 TEXT, col4 TEXT, col5 TEXT)")
-                        with open(p, 'r', encoding='utf-8', errors='ignore') as f:
-                            header = f.readline()
-                            batch = []
+                        with open(p,'r',encoding='utf-8',errors='ignore') as f:
+                            f.readline(); batch=[]
                             for line in f:
-                                parts = line.rstrip('\n').split('\t')
-                                parts.extend([''] * (5 - len(parts)))
-                                batch.append(tuple(parts[:5]))
-                                if len(batch) >= 5000:
-                                    cursor.executemany(f"INSERT INTO {table} VALUES (?,?,?,?,?)", batch)
-                                    batch.clear()
+                                parts=line.rstrip('\n').split('\t'); parts+=['']*(5-len(parts))
+                                batch.append(tuple(pp.strip() for pp in parts[:5]))
+                                if len(batch)>=5000:
+                                    cursor.executemany(f"INSERT INTO {table} VALUES (?,?,?,?,?)", batch); batch.clear()
                             if batch:
                                 cursor.executemany(f"INSERT INTO {table} VALUES (?,?,?,?,?)", batch)
-                        conn.commit()
-                        print(f"Loaded descriptor {filename} into {table}")
+                        conn.commit(); print(f"Loaded descriptor {filename}")
                     except Exception as e:
-                        print(f"Failed loading descriptor {filename}: {e}")
+                        print(f"Descriptor load failed {filename}: {e}")
                     break
-        load_descriptor('desc_r_07_quality_code.txt', 'quality_code_desc')
-        load_descriptor('desc_r_15_land_usecode.txt', 'land_use_code_desc')
+        load_descriptor('desc_r_07_quality_code.txt','quality_code_desc')
+        load_descriptor('desc_r_15_land_usecode.txt','land_use_code_desc')
 
-        # Load additional tables for deeper bed/bath parsing
-        additional_files = {}
-        for fname in ['fixtures.txt', 'building_other.txt', 'structural_elem1.txt', 'structural_elem2.txt', 'extra_features.txt']:
-            for base_dir in [TEXT_DIR, EXTRACTED_DIR]:
-                fpath = base_dir / fname
-                if fpath.exists():
-                    additional_files[fname] = fpath
-                    break
-
-        # Load structural and feature data for room counting
-        for fname, fpath in additional_files.items():
-            table_name = fname.replace('.txt', '').replace('-', '_')
+        # Supplemental files
+        supplemental = {}
+        for fname in ['fixtures.txt','building_other.txt','structural_elem1.txt','structural_elem2.txt','extra_features.txt']:
+            for base in [TEXT_DIR, EXTRACTED_DIR]:
+                p = base/fname
+                if p.exists(): supplemental[fname]=p; break
+        for fname, path in supplemental.items():
             try:
-                headers = create_table_from_csv(cursor, table_name, fpath)
-                load_csv_to_table(cursor, table_name, fpath, headers, batch_size=5000)
-                print(f"Loaded {fname} for room analysis")
+                hdrs = create_table_from_csv(cursor, fname.replace('.txt','').replace('-','_'), path)
+                load_csv_to_table(cursor, fname.replace('.txt','').replace('-','_'), path, hdrs, batch_size=5000)
             except Exception as e:
-                print(f"Failed to load {fname}: {e}")
+                print(f"Supplemental load failed {fname}: {e}")
 
-        # Create derived property metrics (bedrooms, bathrooms, property type, quality rating)
+        # property_derived
         cursor.execute("DROP TABLE IF EXISTS property_derived")
-        cursor.execute("""
-            CREATE TABLE property_derived (
-                acct TEXT PRIMARY KEY,
-                bedrooms INTEGER,
-                bathrooms REAL,
-                property_type TEXT,
-                quality_code TEXT,
-                quality_rating REAL,
-                overall_rating REAL,
-                rating_explanation TEXT,
-                amenities TEXT
-            )
-        """)
+        cursor.execute("""CREATE TABLE property_derived (
+            acct TEXT PRIMARY KEY,
+            bedrooms INTEGER,
+            bathrooms REAL,
+            property_type TEXT,
+            quality_code TEXT,
+            quality_rating REAL,
+            overall_rating REAL,
+            rating_explanation TEXT,
+            amenities TEXT,
+            stories INTEGER,
+            has_pool INTEGER,
+            has_garage INTEGER
+        )""")
 
-        # Build quality code mapping based on actual data from quality_code_desc table
-        quality_rank = {}
-        current_year = datetime.now().year
-
-        # Get quality codes from quality_code_desc table and building_res data
+        # Quality ranking
+        quality_rank={}
         try:
-            cursor.execute("SELECT col1, col2 FROM quality_code_desc WHERE col1<>'' AND col2<>''")
-            quality_desc_data = cursor.fetchall()
-            print(f"Quality descriptions found: {quality_desc_data}")
-            
-            # Map quality codes to numeric scores based on description
-            quality_mapping = {
-                'X ': 10.0,  # Superior
-                'A ': 9.0,   # Excellent  
-                'B ': 7.0,   # Good
-                'C ': 5.0,   # Average
-                'D ': 3.0,   # Low
-                'E ': 1.5,   # Very Low
-                'F ': 1.0    # Poor
-            }
-            
-            # Also check for variations without space
-            for code in ['X', 'A', 'B', 'C', 'D', 'E', 'F']:
-                if code not in quality_mapping:
-                    quality_mapping[code] = quality_mapping.get(code + ' ', 5.0)
-            
-            quality_rank = quality_mapping
-            print(f"Quality ranking system: {quality_rank}")
-            
-        except Exception as e:
-            print(f"Error setting up quality ranking: {e}")
-            # Fallback quality ranking
-            quality_rank = {
-                'X ': 10.0, 'X': 10.0,  # Superior
-                'A ': 9.0, 'A': 9.0,    # Excellent  
-                'B ': 7.0, 'B': 7.0,    # Good
-                'C ': 5.0, 'C': 5.0,    # Average
-                'D ': 3.0, 'D': 3.0,    # Low
-                'E ': 1.5, 'E': 1.5,    # Very Low
-                'F ': 1.0, 'F': 1.0     # Poor
-            }
-
-        # Land use / property type mapping from descriptor if possible (assume code in col1, desc in col2)
-        land_use_map = {}
-        try:
-            cursor.execute("SELECT col1, col2 FROM land_use_code_desc WHERE col1<>''")
-            land_use_map = {r[0]: r[1] for r in cursor.fetchall() if r[0]}
+            cursor.execute("SELECT col1,col2 FROM quality_code_desc WHERE col1<>'' AND col2<>''")
+            for c1,c2 in cursor.fetchall():
+                # simple heuristic mapping
+                base=c1.strip()[:1]
+                mapping={'X':10,'A':9,'B':7,'C':5,'D':3,'E':1.5,'F':1}
+                if base in mapping: quality_rank[c1.strip()]=mapping[base]
         except Exception:
             pass
+        if not quality_rank:
+            quality_rank={'X':10,'A':9,'B':7,'C':5,'D':3,'E':1.5,'F':1}
 
-        # Enhanced regex patterns for bed/bath extraction from descriptions
-        bed_patterns = [
-            re.compile(r'\b(\d{1,2})\s*(?:BR|BED|BEDROOM)S?\b', re.IGNORECASE),
-            re.compile(r'(\d{1,2})\s*[/\-]\s*(\d{1,2})(?:\s*[/\-]\s*\d{1,2})?\b'),  # 3/2 format
-            re.compile(r'\b(\d{1,2})\s*BED\b', re.IGNORECASE)
-        ]
-        bath_patterns = [
-            re.compile(r'\b(\d{1,2}(?:\.\d)?)\s*(?:BA|BATH|BATHROOM)S?\b', re.IGNORECASE),
-            re.compile(r'\b(\d{1,2})\s*[/\-]\s*(\d{1,2}(?:\.\d)?)\b'),  # 3/2.5 format  
-            re.compile(r'(\d{1,2}(?:\.\d)?)\s*BATH\b', re.IGNORECASE)
-        ]
+        # Land use mapping
+        land_use_map={}
+        try:
+            cursor.execute("SELECT col1,col2 FROM land_use_code_desc WHERE col1<>''")
+            land_use_map={r[0].strip():r[1].strip() for r in cursor.fetchall() if r[0]}
+        except Exception: pass
+        fallback_types={'A1':'Residential Single-Family','A2':'Residential Multi-Family','B2':'Commercial','B3':'Industrial','X3':'Exempt'}
+        for k,v in fallback_types.items(): land_use_map.setdefault(k,v)
 
-        # Collect all property data for comprehensive parsing
-        cursor.execute("SELECT acct, dscr, structure_dscr, eff, qa_cd, property_use_cd FROM building_res")
-        building_data = {row[0]: row[1:] for row in cursor.fetchall()}
+        # Regex patterns
+        bed_patterns=[re.compile(r'\b(\d{1,2})\s*(?:BR|BED|BEDROOM)S?\b',re.IGNORECASE), re.compile(r'(\d{1,2})\s*/\s*(\d{1,2})'), re.compile(r'\b(\d{1,2})\s*BED\b',re.IGNORECASE)]
+        bath_patterns=[re.compile(r'\b(\d{1,2}(?:\.\d)?)\s*(?:BA|BATH|BATHROOM)S?\b',re.IGNORECASE)]
 
-        # Get explicit bedroom/bathroom counts from fixtures.txt
-        fixture_counts = {}
+        # Base building rows
+        cursor.execute("SELECT acct, dscr, structure_dscr, eff, qa_cd, property_use_cd, im_sq_ft, gross_ar FROM building_res")
+        building_data={r[0]:r[1:] for r in cursor.fetchall()}
+
+        # Fixtures counts (bed/bath + stories)
+        fixture_counts={}
         try:
             cursor.execute("SELECT acct, type, type_dscr, units FROM fixtures WHERE type IS NOT NULL AND units IS NOT NULL")
-            for acct, ftype, type_desc, units in cursor.fetchall():
-                # Use trimmed account to match building_res padded accounts
-                acct_trimmed = acct.strip()
-                if acct_trimmed not in fixture_counts:
-                    fixture_counts[acct_trimmed] = {'bedrooms': 0, 'bathrooms': 0.0}
-                
-                try:
-                    unit_count = float(units) if units else 0
-                except:
-                    unit_count = 0
-                
-                # Map fixture types to bedroom/bathroom counts
-                ftype = ftype.strip().upper() if ftype else ''
-                desc = (type_desc or '').upper()
-                
-                # Bedroom fixtures
-                if ftype == 'RMB' or 'BEDROOM' in desc:
-                    fixture_counts[acct_trimmed]['bedrooms'] += int(unit_count)
-                elif ftype.startswith('AP') and 'BEDROOM' in desc:
-                    # Apartment units: AP1=1-bed, AP2=2-bed, AP3=3-bed
-                    if ftype == 'AP1':
-                        fixture_counts[acct_trimmed]['bedrooms'] += int(unit_count) * 1
-                    elif ftype == 'AP2':
-                        fixture_counts[acct_trimmed]['bedrooms'] += int(unit_count) * 2
-                    elif ftype == 'AP3':
-                        fixture_counts[acct_trimmed]['bedrooms'] += int(unit_count) * 3
-                    elif ftype == 'AP4':
-                        fixture_counts[acct_trimmed]['bedrooms'] += int(unit_count) * 4
-                
-                # Bathroom fixtures
-                if ftype == 'RMF' or 'FULL BATH' in desc:
-                    fixture_counts[acct_trimmed]['bathrooms'] += unit_count
-                elif ftype == 'RMH' or 'HALF BATH' in desc:
-                    fixture_counts[acct_trimmed]['bathrooms'] += unit_count * 0.5
-                elif 'BATH' in desc and ftype.startswith('RM'):
-                    fixture_counts[acct_trimmed]['bathrooms'] += unit_count
-                
+            for acct, ftype, tdesc, units in cursor.fetchall():
+                at=acct.strip(); fc=fixture_counts.setdefault(at,{'bedrooms':0,'bathrooms':0.0,'stories':None,'c_stories':None})
+                try: u=float(units) if units not in (None,'') else 0
+                except: u=0
+                fupper=(ftype or '').upper(); dupper=(tdesc or '').upper()
+                if fupper=='RMB' or 'BEDROOM' in dupper: fc['bedrooms']+=int(u)
+                if fupper.startswith('AP') and 'BEDROOM' in dupper:
+                    mult={'AP1':1,'AP2':2,'AP3':3,'AP4':4}.get(fupper,0); fc['bedrooms']+=int(u)*mult
+                if fupper=='RMF' or 'FULL BATH' in dupper: fc['bathrooms']+=u
+                elif fupper=='RMH' or 'HALF BATH' in dupper: fc['bathrooms']+=0.5*u
+                if fupper=='STY' and u>0 and fc.get('stories') is None:
+                    try: fc['stories']=int(round(u))
+                    except: pass
+                if fupper=='STC' and u>0 and fc.get('c_stories') is None:
+                    try: fc['c_stories']=int(round(u))
+                    except: pass
         except sqlite3.OperationalError:
-            print("fixtures table not available")
+            pass
 
-        # Pre-load amenities data for all properties
-        amenities_data = {}
+        # Amenities
+        amenities_data={}
         try:
             cursor.execute("SELECT acct, l_dscr FROM extra_features WHERE l_dscr IS NOT NULL")
-            print("Loading amenities data...")
             for acct, desc in cursor.fetchall():
-                desc = desc.strip() if desc else ""
-                if desc and any(keyword in desc.upper() for keyword in ['POOL', 'GARAGE', 'DECK', 'PATIO', 'FIRE', 'SPA']):
-                    # Use trimmed account to match fixtures table format
-                    acct_trimmed = acct.strip()
-                    if acct_trimmed not in amenities_data:
-                        amenities_data[acct_trimmed] = []
-                    amenities_data[acct_trimmed].append(desc)
-            print(f"Loaded amenities for {len(amenities_data)} properties")
-        except sqlite3.OperationalError:
-            print("extra_features table not available")
+                if desc:
+                    up=desc.upper()
+                    if any(k in up for k in ['POOL','GARAGE','DECK','PATIO','FIRE','SPA']):
+                        amenities_data.setdefault(acct.strip(),[]).append(desc.strip())
+        except sqlite3.OperationalError: pass
 
-        # Get room counts from structural elements and features for fallback
-        room_counts = {}
-        
-        # Parse structural elements for room indicators
-        for table in ['structural_elem1', 'structural_elem2']:
-            try:
-                cursor.execute(f"SELECT acct, type_dscr FROM {table} WHERE type_dscr IS NOT NULL")
-                for acct, desc in cursor.fetchall():
-                    if acct not in room_counts:
-                        room_counts[acct] = {'bed_hints': [], 'bath_hints': []}
-                    desc_upper = desc.upper()
-                    if any(word in desc_upper for word in ['BEDROOM', 'BED']):
-                        room_counts[acct]['bed_hints'].append(desc)
-                    if any(word in desc_upper for word in ['BATHROOM', 'BATH', 'TOILET']):
-                        room_counts[acct]['bath_hints'].append(desc)
-            except sqlite3.OperationalError:
-                pass  # Table doesn't exist
-
-        # Parse extra features for room counts
-        try:
-            cursor.execute("SELECT acct, count, s_dscr, l_dscr FROM extra_features WHERE s_dscr IS NOT NULL OR l_dscr IS NOT NULL")
-            for acct, count, s_desc, l_desc in cursor.fetchall():
-                if acct not in room_counts:
-                    room_counts[acct] = {'bed_hints': [], 'bath_hints': []}
-                desc = f"{s_desc or ''} {l_desc or ''}".upper()
+        # Derive metrics (stories primary from fixtures)
+        rows=[]; now_year=datetime.now().year
+        for acct,(dscr, sd, eff, qa_cd, puc, im_sq_ft, gross_ar) in building_data.items():
+            at=acct.strip(); fc=fixture_counts.get(at,{})
+            beds=fc.get('bedrooms'); baths=fc.get('bathrooms')
+            stories=fc.get('stories') if fc.get('stories') is not None else fc.get('c_stories')
+            # Heuristic backup using gross area ratio if still None
+            if stories is None:
                 try:
-                    count_val = int(count) if count and count.isdigit() else 0
-                except:
-                    count_val = 0
-                
-                if any(word in desc for word in ['BEDROOM', 'BED']) and count_val > 0:
-                    room_counts[acct]['bed_hints'].append(f"COUNT:{count_val}")
-                if any(word in desc for word in ['BATHROOM', 'BATH', 'TOILET', 'RESTROOM']) and count_val > 0:
-                    room_counts[acct]['bath_hints'].append(f"COUNT:{count_val}")
-        except sqlite3.OperationalError:
-            pass
-
-        # Parse building_other for additional room data
-        try:
-            cursor.execute("SELECT acct, structure_dscr, dscr, notes FROM building_other WHERE structure_dscr IS NOT NULL OR dscr IS NOT NULL OR notes IS NOT NULL")
-            for acct, struct_desc, desc, notes in cursor.fetchall():
-                if acct not in room_counts:
-                    room_counts[acct] = {'bed_hints': [], 'bath_hints': []}
-                text = f"{struct_desc or ''} {desc or ''} {notes or ''}"
-                if text.strip():
-                    room_counts[acct]['bed_hints'].append(text)
-                    room_counts[acct]['bath_hints'].append(text)
-        except sqlite3.OperationalError:
-            pass
-
-        # Derive bedroom/bathroom counts (prioritize fixtures.txt data)
-        derived = {}
-        for acct, (dscr, structure_dscr, eff, qa_cd, property_use_cd) in building_data.items():
-            # Start with explicit fixture counts if available (account format fix)
-            acct_trimmed = acct.strip()
-            beds = fixture_counts.get(acct_trimmed, {}).get('bedrooms', None)
-            baths = fixture_counts.get(acct_trimmed, {}).get('bathrooms', None)
-            
-            # If no fixture data, try text parsing as fallback
-            if beds is None or baths is None:
-                # Combine all text sources
-                all_text = []
-                if dscr: all_text.append(dscr)
-                if structure_dscr: all_text.append(structure_dscr)
-                
-                # Add room hints from other tables
-                if acct in room_counts:
-                    all_text.extend(room_counts[acct]['bed_hints'])
-                    all_text.extend(room_counts[acct]['bath_hints'])
-                
-                combined_text = ' '.join(all_text)
-                
-                # Extract bedrooms if not from fixtures
-                if beds is None:
-                    for pattern in bed_patterns:
-                        matches = pattern.findall(combined_text)
-                        if matches:
-                            if isinstance(matches[0], tuple):
-                                # Handle 3/2 format - first number is bedrooms
-                                try: beds = max(beds or 0, int(matches[0][0]))
-                                except: pass
-                            else:
-                                try: beds = max(beds or 0, int(matches[0]))
-                                except: pass
-                
-                # Look for explicit count hints for bedrooms
-                if beds is None:
-                    for hint in room_counts.get(acct, {}).get('bed_hints', []):
-                        if 'COUNT:' in hint:
-                            try:
-                                count_val = int(hint.split('COUNT:')[1])
-                                beds = max(beds or 0, count_val)
-                            except:
-                                pass
-                
-                # Extract bathrooms if not from fixtures
-                if baths is None:
-                    for pattern in bath_patterns:
-                        matches = pattern.findall(combined_text)
-                        if matches:
-                            if isinstance(matches[0], tuple) and len(matches[0]) > 0:
-                                # Handle 3/2.5 format - second number is bathrooms
-                                try: 
-                                    if len(matches[0]) > 1:
-                                        bath_val = float(matches[0][1])
-                                    else:
-                                        bath_val = float(matches[0][0])
-                                    baths = max(baths or 0, bath_val)
-                                except: pass
-                            elif matches[0]:  # Single string match
-                                try: baths = max(baths or 0, float(str(matches[0])))
-                                except: pass
-                
-                # Look for explicit bathroom count hints
-                if baths is None:
-                    for hint in room_counts.get(acct, {}).get('bath_hints', []):
-                        if 'COUNT:' in hint:
-                            try:
-                                count_val = float(hint.split('COUNT:')[1])
-                                baths = max(baths or 0, count_val)
-                            except:
-                                pass
-
-            derived[acct] = {'bedrooms': beds, 'bathrooms': baths, 'eff': eff, 'qa_cd': qa_cd, 'use': property_use_cd}
-
-        rows = []
-        for acct, data in derived.items():
-            qa_cd = (data['qa_cd'] or '').strip() if data['qa_cd'] else ''
-            quality_rating = quality_rank.get(qa_cd, None)
-            
-            # Age score (newer is higher, scaled 1-10)
-            age_score = None
-            if data['eff'] and str(data['eff']).isdigit():
-                build_year = int(data['eff'])
-                age = max(0, current_year - build_year)
-                # More generous age scoring: properties lose 0.05 points per year
-                age_score = max(1.0, min(10.0, 10 - (age * 0.05)))
-            
-            overall_rating = None
-            if quality_rating is not None:
-                if age_score is not None:
-                    # Combine quality (70%) and age (30%)
-                    overall_rating = round((quality_rating * 0.7 + age_score * 0.3), 1)
-                else:
-                    # Use quality rating alone if no age data
-                    overall_rating = quality_rating
-            elif age_score is not None:
-                # Use age score alone if no quality data
-                overall_rating = age_score
-            
-            prop_type = None
-            if data['use'] and data['use'] in land_use_map:
-                prop_type = land_use_map[data['use']]
-            
-            rating_expl = None
-            if overall_rating is not None:
-                components = []
-                if quality_rating is not None:
-                    components.append(f"quality {qa_cd or 'N/A'} ({quality_rating}/10)")
-                if age_score is not None and data['eff']:
-                    components.append(f"age ({data['eff']}, {age_score:.1f}/10)")
-                rating_expl = f"Score: {', '.join(components)}"[:180]
-            
-            # Extract amenities from pre-loaded data (account format fix)
-            amenities = None
-            acct_trimmed = acct.strip()
-            if acct_trimmed in amenities_data:
-                amenity_list = amenities_data[acct_trimmed][:5]  # Limit to first 5 amenities
-                amenities = ', '.join(amenity_list) if amenity_list else None
-            
-            rows.append((acct, data['bedrooms'], data['bathrooms'], prop_type, qa_cd, quality_rating, overall_rating, rating_expl, amenities))
+                    if im_sq_ft and gross_ar and im_sq_ft not in ('','0') and gross_ar not in ('','0'):
+                        ratio=float(gross_ar)/float(im_sq_ft)
+                        if 1.0 <= ratio <= 4.0:
+                            stories=int(round(ratio))
+                except: pass
+            qa=(qa_cd or '').strip()
+            q_rating=quality_rank.get(qa)
+            age_score=None
+            if eff and str(eff).isdigit():
+                try:
+                    age=max(0, now_year-int(eff)); age_score=max(1.0, min(10.0, 10-age*0.05))
+                except: pass
+            overall=None
+            if q_rating is not None and age_score is not None: overall=round(q_rating*0.7+age_score*0.3,1)
+            elif q_rating is not None: overall=q_rating
+            elif age_score is not None: overall=age_score
+            ptype=land_use_map.get(puc)
+            expl=None
+            if overall is not None:
+                parts=[]
+                if q_rating is not None: parts.append(f"quality {qa or 'NA'} ({q_rating}/10)")
+                if age_score is not None and eff: parts.append(f"age ({eff}, {age_score:.1f}/10)")
+                expl=("Score: "+', '.join(parts))[:180]
+            amenities=None; has_pool=0; has_garage=0
+            if at in amenities_data:
+                al=amenities_data[at][:5]
+                amenities=', '.join(al) if al else None
+                upc=' '.join(al).upper()
+                if 'POOL' in upc: has_pool=1
+                if 'GARAGE' in upc and 'NO GARAGE' not in upc: has_garage=1
+            if has_garage==0 and (dscr or sd):
+                desc_combo=(' '.join(filter(None,[dscr,sd]))).upper()
+                if 'GARAGE' in desc_combo and 'NO GARAGE' not in desc_combo:
+                    has_garage=1
+            if has_pool==0 and (dscr or sd) and 'POOL' in (' '.join(filter(None,[dscr,sd]))).upper():
+                has_pool=1
+            rows.append((acct, beds, baths, ptype, qa, q_rating, overall, expl, amenities, stories, has_pool, has_garage))
 
         if rows:
-            cursor.executemany("INSERT INTO property_derived VALUES (?,?,?,?,?,?,?,?,?)", rows)
-            conn.commit()
-            print(f"Inserted {len(rows)} derived property rows.")
+            cursor.executemany("INSERT INTO property_derived VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            conn.commit(); print(f"Inserted {len(rows)} derived property rows.")
         else:
             print("No derived property metrics generated.")
-        
     finally:
         conn.close()
 
@@ -549,6 +380,7 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
          br.eff AS 'Build Year',
          pd.bedrooms AS 'Bedrooms',
          pd.bathrooms AS 'Bathrooms',
+         pd.stories AS 'Stories',
          br.im_sq_ft AS 'Building Area',
          ra.land_val AS 'Land Value',
          ra.bld_val AS 'Building Value',
@@ -586,7 +418,40 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
                 raise
         rows = cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, r)) for r in rows]
+        out: List[Dict] = []
+        for r in rows:
+            rec = dict(zip(cols, r))
+            # Provide legacy/simple keys expected by templates
+            rec['acct'] = rec.get('Account Number')
+            rec['owner_name'] = rec.get('Owner Name')
+            rec['site_addr_1'] = rec.get('Address')
+            rec['site_addr_3'] = rec.get('Zip Code')
+            rec['bedrooms'] = rec.get('Bedrooms')
+            rec['bathrooms'] = rec.get('Bathrooms')
+            rec['stories'] = rec.get('Stories')
+            rec['amenities'] = rec.get('Estimated Amenities') or rec.get('Amenities')
+            rec['build_year'] = rec.get('Build Year')
+            # Normalize valuation & size fields for easier template access
+            rec['market_value'] = rec.get('Market Value')
+            rec['land_value'] = rec.get('Land Value')
+            rec['building_value'] = rec.get('Building Value')
+            rec['land_area'] = rec.get('Land Area')
+            rec['building_area'] = rec.get('Building Area')
+            rec['property_type'] = rec.get('Property Type')
+            rec['overall_rating'] = rec.get('Overall Rating')
+            rec['quality_rating'] = rec.get('Quality Rating')
+            rec['rating_explanation'] = rec.get('Rating Explanation')
+            # Normalize price per square foot for template (ppsf) convenience
+            ppsf_val = rec.get('Price Per Sq Ft')
+            try:
+                if ppsf_val is not None and ppsf_val != '' and ppsf_val != '0':
+                    rec['ppsf'] = round(float(ppsf_val), 2)
+                else:
+                    rec['ppsf'] = None
+            except Exception:
+                rec['ppsf'] = None
+            out.append(rec)
+        return out
     finally:
         conn.close()
 
@@ -598,10 +463,14 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-def find_comparables(acct: str, max_distance_miles: float = 5.0, size_tolerance: float = 0.2, land_tolerance: float = 0.2, limit: int = 50) -> List[Dict]:
+def find_comparables(acct: str, max_distance_miles: float = 15.0, size_tolerance: float = 0.2, land_tolerance: float = 0.2, limit: int = 50) -> List[Dict]:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
+        # Bail out early if geo table absent
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
+        if cur.fetchone() is None:
+            return []  # No geo coordinates available yet
         # Base property with bedroom/bathroom data
         cur.execute("""SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft,
                              pd.bedrooms, pd.bathrooms, pg.latitude, pg.longitude, pd.overall_rating
@@ -616,10 +485,19 @@ def find_comparables(acct: str, max_distance_miles: float = 5.0, size_tolerance:
         (acct, addr, zipc, mval, land_ar, im_sq_ft, bedrooms, bathrooms, blat, blon, rating) = base
         if blat is None or blon is None:
             return []
-        im_min = (float(im_sq_ft) * (1 - size_tolerance)) if im_sq_ft else None
-        im_max = (float(im_sq_ft) * (1 + size_tolerance)) if im_sq_ft else None
-        land_min = (float(land_ar) * (1 - land_tolerance)) if land_ar else None
-        land_max = (float(land_ar) * (1 + land_tolerance)) if land_ar else None
+        # Normalized numeric baseline
+        try:
+            base_im = float(im_sq_ft) if im_sq_ft and im_sq_ft not in ('','0') else None
+        except:
+            base_im = None
+        try:
+            base_land = float(land_ar) if land_ar and land_ar not in ('','0') else None
+        except:
+            base_land = None
+        im_min = (base_im * (1 - size_tolerance)) if base_im else None
+        im_max = (base_im * (1 + size_tolerance)) if base_im else None
+        land_min = (base_land * (1 - land_tolerance)) if base_land else None
+        land_max = (base_land * (1 + land_tolerance)) if base_land else None
         deg_buffer = max_distance_miles / 69.0
         
         # Candidate comps within bounding box with bedroom/bathroom data
@@ -632,14 +510,25 @@ def find_comparables(acct: str, max_distance_miles: float = 5.0, size_tolerance:
                       WHERE pg.latitude BETWEEN ? AND ? AND pg.longitude BETWEEN ? AND ? AND ra.acct <> ?""",
                     (blat - deg_buffer, blat + deg_buffer, blon - deg_buffer, blon + deg_buffer, acct))
         comps = []
-        for row in cur.fetchall():
+        rows_raw = cur.fetchall()
+        for row in rows_raw:
             (c_acct, c_addr, c_zip, c_mval, c_land, c_im, c_bed, c_bath, c_lat, c_lon, c_rating) = row
             if c_lat is None or c_lon is None:
                 continue
-            if im_sq_ft and c_im and im_min is not None and im_max is not None and not (im_min <= float(c_im) <= im_max):
-                continue
-            if land_ar and c_land and land_min is not None and land_max is not None and not (land_min <= float(c_land) <= land_max):
-                continue
+            # Apply size filter only if both base and candidate sizes are known
+            try:
+                if base_im and c_im and c_im not in ('','0') and im_min is not None and im_max is not None:
+                    cimf = float(c_im)
+                    if cimf < im_min or cimf > im_max:
+                        continue
+            except: pass
+            # Apply land filter only if both base and candidate land areas are known
+            try:
+                if base_land and c_land and c_land not in ('','0') and land_min is not None and land_max is not None:
+                    clandf = float(c_land)
+                    if clandf < land_min or clandf > land_max:
+                        continue
+            except: pass
             dist = haversine(float(blat), float(blon), float(c_lat), float(c_lon))
             if dist <= max_distance_miles:
                 ppsf = None
@@ -663,8 +552,469 @@ def find_comparables(acct: str, max_distance_miles: float = 5.0, size_tolerance:
                     'Distance Miles': round(dist, 2),
                     'Price Per Sq Ft': round(ppsf, 2) if ppsf else None
                 })
+        # If no comps found, progressively relax constraints: first distance, then size/land filters already implicitly relaxed when unknown
+        if not comps:
+            # Expand search radius iteratively (2x then 3x) up to 15 miles
+            for factor in (2, 3):
+                new_radius = max_distance_miles * factor
+                deg_buffer2 = new_radius / 69.0
+                cur.execute("""SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft,
+                                     pd.bedrooms, pd.bathrooms, pg.latitude, pg.longitude, pd.overall_rating
+                              FROM real_acct ra
+                              LEFT JOIN building_res br ON ra.acct = br.acct
+                              LEFT JOIN property_derived pd ON ra.acct = pd.acct
+                              JOIN property_geo pg ON ra.acct = pg.acct
+                              WHERE pg.latitude BETWEEN ? AND ? AND pg.longitude BETWEEN ? AND ? AND ra.acct <> ?""",
+                            (blat - deg_buffer2, blat + deg_buffer2, blon - deg_buffer2, blon + deg_buffer2, acct))
+                rows2 = cur.fetchall()
+                for row in rows2:
+                    (c_acct, c_addr, c_zip, c_mval, c_land, c_im, c_bed, c_bath, c_lat, c_lon, c_rating) = row
+                    if c_lat is None or c_lon is None:
+                        continue
+                    dist = haversine(float(blat), float(blon), float(c_lat), float(c_lon))
+                    if dist <= new_radius:
+                        ppsf = None
+                        if c_im and c_mval and str(c_im) not in ('0',''):
+                            try: ppsf = float(c_mval)/float(c_im)
+                            except: pass
+                        comps.append({
+                            'Account Number': c_acct,
+                            'Address': c_addr,
+                            'Zip Code': c_zip,
+                            'Market Value': c_mval,
+                            'Land Area': c_land,
+                            'Building Area': c_im,
+                            'Bedrooms': c_bed,
+                            'Bathrooms': c_bath,
+                            'Overall Rating': c_rating,
+                            'Latitude': c_lat,
+                            'Longitude': c_lon,
+                            'Distance Miles': round(dist, 2),
+                            'Price Per Sq Ft': round(ppsf, 2) if ppsf else None
+                        })
+                if comps:
+                    break
         comps.sort(key=lambda r: (r['Distance Miles'], r['Price Per Sq Ft'] or 0))
         return comps[:limit]
+    finally:
+        cur.close(); conn.close()
+
+
+def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, strategy: str = "equity") -> Dict:
+    """Phase 1 comparable selection.
+
+    Implements:
+      - Neighborhood-first filtering (real_acct.Neighborhood_Code) if subject has code.
+      - Radius expansion tiers (1.5, 3, 5, 10, 15 miles) using Haversine.
+      - Progressive similarity band expansion across living area, lot area, year built, bedrooms/bathrooms.
+      - Graceful skips when data missing.
+
+    Returns dict with keys:
+      subject: subject property record (normalized similar to search_properties entries)
+      comps: list of comparable property dicts (each includes distance_miles when geo available)
+      meta: information about filters used (geo_tier, size_band, lot_band, year_band, bed_bath_band, attempts)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        # Load subject
+        cur.execute("""SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft, br.eff,
+                              pd.bedrooms, pd.bathrooms, pd.amenities, pd.property_type, pd.overall_rating, pd.quality_rating,
+                              pd.rating_explanation, pg.latitude, pg.longitude, ra.Neighborhood_Code,
+                              pd.stories, pd.has_pool, pd.has_garage
+                       FROM real_acct ra
+                       LEFT JOIN building_res br ON ra.acct = br.acct
+                       LEFT JOIN property_derived pd ON ra.acct = pd.acct
+                       LEFT JOIN property_geo pg ON ra.acct = pg.acct
+                       WHERE ra.acct = ?""", (subject_account,))
+        srow = cur.fetchone()
+        if not srow:
+            raise ValueError(f"Subject account {subject_account} not found")
+        (acct, addr1, zipc, mval, land_ar, im_sq_ft, eff_year, s_beds, s_baths, s_amen, s_type, s_overall, s_quality,
+         s_rating_expl, s_lat, s_lon, s_nbhd, s_stories, s_has_pool, s_has_garage) = srow
+        subject = {
+            'acct': acct, 'site_addr_1': addr1, 'site_addr_3': zipc,
+            'market_value': mval, 'land_area': land_ar, 'building_area': im_sq_ft,
+            'build_year': eff_year, 'bedrooms': s_beds, 'bathrooms': s_baths,
+            'amenities': s_amen, 'property_type': s_type, 'overall_rating': s_overall,
+            'quality_rating': s_quality, 'rating_explanation': s_rating_expl,
+            'stories': s_stories, 'has_pool': s_has_pool, 'has_garage': s_has_garage
+        }
+        # Compute subject PPSF
+        try:
+            if im_sq_ft and im_sq_ft not in ('','0') and mval and mval not in ('','0'):
+                subject['ppsf'] = round(float(mval)/float(im_sq_ft),2)
+        except Exception:
+            subject['ppsf'] = None
+        # Baselines numeric
+        def f_or_none(v):
+            try:
+                if v is None: return None
+                vstr = str(v).strip()
+                if vstr == '' or vstr == '0': return None
+                return float(vstr)
+            except: return None
+        base_im = f_or_none(im_sq_ft)
+        base_lot = f_or_none(land_ar)
+        base_year = None
+        try:
+            if eff_year and str(eff_year).isdigit():
+                base_year = int(eff_year)
+        except: pass
+        base_beds = None
+        try:
+            if s_beds is not None and str(s_beds).strip() != '':
+                base_beds = float(s_beds)
+        except: pass
+        base_baths = None
+        try:
+            if s_baths is not None and str(s_baths).strip() != '':
+                base_baths = float(s_baths)
+        except: pass
+
+        # Progressive bands (include None at end meaning "any")
+        size_bands = [0.05, 0.10, 0.15, 0.20, 0.25, 0.35, None]
+        lot_bands = [0.10, 0.20, 0.30, 0.40, 0.50, None]
+        year_bands = [5, 10, 15, 20, 30, None]
+        bed_bath_bands = [1, 2, 3, None]  # None => ignore bed/bath deltas
+        radius_tiers = [1.5, 3, 5, 10, 15, 20, 25]
+        comps: List[Dict] = []
+        # Additional attribute bands (Phase 2)
+        story_tolerances = [0, 1, 2, None] if (s_stories is not None and str(s_stories).strip() != '') else [None]
+        pool_modes = ['match', 'any'] if s_has_pool in (0,1) else ['any']
+        garage_modes = ['match', 'any'] if s_has_garage in (0,1) else ['any']
+
+        chosen_meta = {
+            'geo_tier': None,
+            'radius_miles': None,
+            'size_band': None,
+            'lot_band': None,
+            'year_band': None,
+            'bed_bath_band': None,
+            'story_band': None,
+            'pool_rule': None,
+            'garage_rule': None,
+            'attempts': 0,
+            'subject_has_geo': bool(s_lat is not None and s_lon is not None),
+            'used_neighborhood': False,
+            'scoring_weights': {'distance':0.4,'size':0.25,'year':0.1,'beds_baths':0.1,'stories':0.05,'pool_garage':0.1}
+        }
+        # Helper to evaluate candidate against current bands
+        def passes(candidate, story_tol, pool_mode, garage_mode):
+            (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
+             c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = candidate
+            # size
+            if base_im and size_band is not None and c_im_sq_ft and c_im_sq_ft not in ('','0'):
+                try:
+                    cim = float(c_im_sq_ft)
+                    if cim < base_im*(1-size_band) or cim > base_im*(1+size_band):
+                        return False
+                except: pass
+            # lot
+            if base_lot and lot_band is not None and c_land_ar and c_land_ar not in ('','0'):
+                try:
+                    clot = float(c_land_ar)
+                    if clot < base_lot*(1-lot_band) or clot > base_lot*(1+lot_band):
+                        return False
+                except: pass
+            # year
+            if base_year and year_band is not None and c_eff_year and str(c_eff_year).isdigit():
+                try:
+                    cy = int(c_eff_year)
+                    if abs(cy - base_year) > year_band:
+                        return False
+                except: pass
+            # bedrooms / baths
+            if bed_bath_band is not None:
+                if base_beds is not None and c_beds not in (None,''):
+                    try:
+                        if abs(float(c_beds) - base_beds) > bed_bath_band:
+                            return False
+                    except: pass
+                if base_baths is not None and c_baths not in (None,''):
+                    try:
+                        if abs(float(c_baths) - base_baths) > bed_bath_band:
+                            return False
+                    except: pass
+            # stories
+            if story_tol is not None and s_stories is not None and str(s_stories).strip()!='':
+                # Require candidate to have stories; if missing, exclude at this tolerance
+                if c_stories in (None,''):
+                    return False
+                try:
+                    if abs(int(c_stories) - int(s_stories)) > story_tol:
+                        return False
+                except: pass
+            # pool presence
+            if pool_mode == 'match' and s_has_pool in (0,1) and c_pool in (0,1):
+                if int(c_pool) != int(s_has_pool):
+                    return False
+            # garage presence
+            if garage_mode == 'match' and s_has_garage in (0,1) and c_garage in (0,1):
+                if int(c_garage) != int(s_has_garage):
+                    return False
+            return True
+        # Prepare base select (excluding geo filter specifics)
+        base_select = """SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft, br.eff,
+                                   pd.bedrooms, pd.bathrooms, pd.amenities, pd.property_type, pd.overall_rating, pd.quality_rating,
+                                   pd.rating_explanation, pg.latitude, pg.longitude, pd.stories, pd.has_pool, pd.has_garage
+                            FROM real_acct ra
+                            LEFT JOIN building_res br ON ra.acct = br.acct
+                            LEFT JOIN property_derived pd ON ra.acct = pd.acct
+                            LEFT JOIN property_geo pg ON ra.acct = pg.acct"""
+        # Geo candidate generation functions
+        def neighborhood_candidates():
+            if not s_nbhd or str(s_nbhd).strip() == '':
+                return []
+            cur.execute(base_select + " WHERE ra.acct <> ? AND ra.Neighborhood_Code = ?", (subject_account, s_nbhd))
+            return cur.fetchall()
+        def radius_candidates(radius):
+            if not (s_lat and s_lon):
+                return []
+            deg = radius/69.0
+            cur.execute(base_select + " WHERE ra.acct <> ? AND pg.latitude BETWEEN ? AND ? AND pg.longitude BETWEEN ? AND ?",
+                        (subject_account, s_lat - deg, s_lat + deg, s_lon - deg, s_lon + deg))
+            return cur.fetchall()
+        def zip_candidates():
+            if not zipc:
+                return []
+            cur.execute(base_select + " WHERE ra.acct <> ? AND ra.site_addr_3 = ?", (subject_account, zipc))
+            return cur.fetchall()
+        geo_sequences = []
+        if s_nbhd and str(s_nbhd).strip() != '':
+            geo_sequences.append(('neighborhood', None, neighborhood_candidates))
+        if s_lat and s_lon:
+            for r in radius_tiers:
+                geo_sequences.append((f'radius', r, lambda rr=r: radius_candidates(rr)))
+        geo_sequences.append(('zip', None, zip_candidates))
+        attempts = 0
+        for geo_label, radius_val, producer in geo_sequences:
+            candidates_all = producer()
+            dist_map = {}
+            if s_lat and s_lon:
+                for cand in candidates_all:
+                    c_lat, c_lon = cand[14], cand[15]
+                    if c_lat is not None and c_lon is not None:
+                        try:
+                            dist_map[cand[0]] = haversine(float(s_lat), float(s_lon), float(c_lat), float(c_lon))
+                        except: pass
+            for size_band in size_bands:
+                for lot_band in lot_bands:
+                    for year_band in year_bands:
+                        for bed_bath_band in bed_bath_bands:
+                            for story_tol in story_tolerances:
+                                for pool_mode in pool_modes:
+                                    for garage_mode in garage_modes:
+                                        attempts += 1
+                                        selected = []
+                                        for cand in candidates_all:
+                                            if passes(cand, story_tol, pool_mode, garage_mode):
+                                                (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
+                                                 c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = cand
+                                                if radius_val is not None and s_lat and s_lon and c_acct in dist_map:
+                                                    if dist_map[c_acct] > radius_val:
+                                                        continue
+                                                rec = {
+                                                    'acct': c_acct,
+                                                    'site_addr_1': c_addr1,
+                                                    'site_addr_3': c_zipc,
+                                                    'market_value': c_mval,
+                                                    'land_area': c_land_ar,
+                                                    'building_area': c_im_sq_ft,
+                                                    'build_year': c_eff_year,
+                                                    'bedrooms': c_beds,
+                                                    'bathrooms': c_baths,
+                                                    'stories': c_stories,
+                                                    'has_pool': c_pool,
+                                                    'has_garage': c_garage,
+                                                    'amenities': c_amen,
+                                                    'property_type': c_type,
+                                                    'overall_rating': c_overall,
+                                                    'quality_rating': c_quality,
+                                                    'rating_explanation': c_rating_expl,
+                                                    'distance_miles': round(dist_map.get(c_acct, 0.0), 2) if c_acct in dist_map else None
+                                                }
+                                                try:
+                                                    if c_im_sq_ft and c_im_sq_ft not in ('','0') and c_mval and c_mval not in ('','0'):
+                                                        rec['ppsf'] = round(float(c_mval)/float(c_im_sq_ft),2)
+                                                except: pass
+                                                selected.append(rec)
+                                                if len(selected) >= max_comps:
+                                                    break
+                                        if len(selected) >= min_comps:
+                                            comps = selected
+                                            chosen_meta.update({
+                                                'geo_tier': geo_label,
+                                                'radius_miles': radius_val,
+                                                'size_band': ('any' if size_band is None else f"±{int(size_band*100)}%"),
+                                                'lot_band': ('any' if lot_band is None else f"±{int(lot_band*100)}%"),
+                                                'year_band': ('any' if year_band is None else f"±{year_band}y"),
+                                                'bed_bath_band': ('any' if bed_bath_band is None else f"±{bed_bath_band}"),
+                                                'story_band': ('any' if story_tol is None else f"±{story_tol}"),
+                                                'pool_rule': pool_mode,
+                                                'garage_rule': garage_mode,
+                                                'attempts': attempts,
+                                                'used_neighborhood': geo_label == 'neighborhood'
+                                            })
+                                            # Compute composite score
+                                            def compute_score(r):
+                                                w=chosen_meta['scoring_weights']
+                                                score=0.0; penalties=0.0
+                                                # Distance (lower better)
+                                                try:
+                                                    if r.get('distance_miles') is not None:
+                                                        penalties += w['distance'] * min(1.0, float(r['distance_miles'])/15.0)
+                                                except: pass
+                                                # Size delta proportion
+                                                try:
+                                                    if base_im and r.get('building_area') and r.get('building_area') not in ('','0'):
+                                                        sdelta=abs(float(r['building_area'])-base_im)/base_im
+                                                        penalties += w['size'] * min(1.0, sdelta/0.30)
+                                                except: pass
+                                                # Year diff
+                                                try:
+                                                    if base_year and r.get('build_year') and str(r.get('build_year')).isdigit():
+                                                        ydelta=abs(int(r['build_year'])-base_year)
+                                                        penalties += w['year'] * min(1.0, ydelta/15.0)
+                                                except: pass
+                                                # Beds/baths diff
+                                                try:
+                                                    if base_beds and r.get('bedrooms') not in (None,''):
+                                                        penalties += w['beds_baths'] * (min(2.0, abs(float(r['bedrooms'])-base_beds))/2.0)
+                                                except: pass
+                                                try:
+                                                    if base_baths and r.get('bathrooms') not in (None,''):
+                                                        penalties += w['beds_baths'] * (min(2.0, abs(float(r['bathrooms'])-base_baths))/2.0)
+                                                except: pass
+                                                # Stories diff
+                                                try:
+                                                    if s_stories and r.get('stories') not in (None,''):
+                                                        penalties += w['stories'] * min(1.0, abs(int(r['stories'])-int(s_stories)))
+                                                except: pass
+                                                # Pool/Garage match bonus (reduce penalty if match)
+                                                if s_has_pool in (0,1) and r.get('has_pool') in (0,1):
+                                                    if int(r['has_pool'])!=int(s_has_pool): penalties += w['pool_garage']*0.5
+                                                if s_has_garage in (0,1) and r.get('has_garage') in (0,1):
+                                                    if int(r['has_garage'])!=int(s_has_garage): penalties += w['pool_garage']*0.5
+                                                # Convert penalties to score (higher better)
+                                                score = round(100 * (1 - min(0.99, penalties)),2)
+                                                return score
+                                            for r in comps:
+                                                r['score']=compute_score(r)
+                                            comps.sort(key=lambda r:(-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
+                                            return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
+                                            # end if len(selected) >= min_comps
+        chosen_meta['attempts'] = attempts
+        return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
+    finally:
+        cur.close(); conn.close()
+
+
+def find_comparables_debug(acct: str, max_distance_miles: float = 5.0, size_tolerance: float = 0.2, land_tolerance: float = 0.2) -> Dict:
+    """Return diagnostic info explaining why comparables may be missing.
+
+    Keys:
+      base_found: bool – subject property exists
+      base_has_geo: bool – subject has latitude/longitude
+      base_building_area: float|None
+      base_land_area: float|None
+      bbox_candidates: int – count of properties inside bounding box (before filters)
+      filtered_size: int – remaining after size filter
+      filtered_land: int – remaining after land area filter
+      within_distance: int – remaining after distance haversine filter
+      reason: str – concise explanation
+    """
+    info = {
+        'base_found': False,
+        'base_has_geo': False,
+        'base_building_area': None,
+        'base_land_area': None,
+        'bbox_candidates': 0,
+        'filtered_size': 0,
+        'filtered_land': 0,
+        'within_distance': 0,
+        'reason': ''
+    }
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
+        if cur.fetchone() is None:
+            info['reason'] = 'property_geo table missing (run import/geocode step).'
+            return info
+        cur.execute("""SELECT ra.acct, ra.land_ar, br.im_sq_ft, pg.latitude, pg.longitude
+                      FROM real_acct ra
+                      LEFT JOIN building_res br ON ra.acct = br.acct
+                      LEFT JOIN property_geo pg ON ra.acct = pg.acct
+                      WHERE ra.acct = ?""", (acct,))
+        row = cur.fetchone()
+        if not row:
+            info['reason'] = 'Subject property not found.'; return info
+        info['base_found'] = True
+        _, land_ar, im_sq_ft, blat, blon = row
+        if im_sq_ft and str(im_sq_ft).isdigit():
+            try: info['base_building_area'] = float(im_sq_ft)
+            except: pass
+        if land_ar:
+            try: info['base_land_area'] = float(land_ar)
+            except: pass
+        if blat is None or blon is None:
+            info['reason'] = 'Subject missing geo coordinates (property_geo).' ; return info
+        info['base_has_geo'] = True
+        deg_buffer = max_distance_miles / 69.0
+        cur.execute("""SELECT ra.acct, ra.land_ar, br.im_sq_ft, pg.latitude, pg.longitude
+                      FROM real_acct ra
+                      LEFT JOIN building_res br ON ra.acct = br.acct
+                      JOIN property_geo pg ON ra.acct = pg.acct
+                      WHERE pg.latitude BETWEEN ? AND ? AND pg.longitude BETWEEN ? AND ? AND ra.acct <> ?""",
+                    (blat - deg_buffer, blat + deg_buffer, blon - deg_buffer, blon + deg_buffer, acct))
+        candidates = cur.fetchall()
+        info['bbox_candidates'] = len(candidates)
+        im_min = (info['base_building_area'] * (1 - size_tolerance)) if info['base_building_area'] else None
+        im_max = (info['base_building_area'] * (1 + size_tolerance)) if info['base_building_area'] else None
+        land_min = (info['base_land_area'] * (1 - land_tolerance)) if info['base_land_area'] else None
+        land_max = (info['base_land_area'] * (1 + land_tolerance)) if info['base_land_area'] else None
+        after_size = []
+        for c_acct, c_land, c_im, c_lat, c_lon in candidates:
+            # size filter
+            if im_min is not None and im_max is not None and c_im and c_im not in ('', '0'):
+                try:
+                    cimf = float(c_im)
+                    if cimf < im_min or cimf > im_max:
+                        continue
+                except:
+                    pass
+            after_size.append((c_acct, c_land, c_im, c_lat, c_lon))
+        info['filtered_size'] = len(after_size)
+        after_land = []
+        for c_acct, c_land, c_im, c_lat, c_lon in after_size:
+            if land_min is not None and land_max is not None and c_land and c_land not in ('', '0'):
+                try:
+                    clandf = float(c_land)
+                    if clandf < land_min or clandf > land_max:
+                        continue
+                except:
+                    pass
+            after_land.append((c_acct, c_land, c_im, c_lat, c_lon))
+        info['filtered_land'] = len(after_land)
+        within_dist = 0
+        for c_acct, c_land, c_im, c_lat, c_lon in after_land:
+            if c_lat is None or c_lon is None: continue
+            try:
+                d = haversine(float(blat), float(blon), float(c_lat), float(c_lon))
+                if d <= max_distance_miles:
+                    within_dist += 1
+            except: pass
+        info['within_distance'] = within_dist
+        if not info['base_has_geo']:
+            info['reason'] = 'Subject missing geo coordinates.'
+        elif info['bbox_candidates'] == 0:
+            info['reason'] = 'No candidates in geographic bounding box (likely sparse geo coverage).'
+        elif info['within_distance'] == 0:
+            info['reason'] = 'All candidates filtered out by size/land/distance constraints.'
+        else:
+            info['reason'] = 'Comparables available.'
+        return info
     finally:
         cur.close(); conn.close()
 

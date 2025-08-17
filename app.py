@@ -4,11 +4,12 @@ import time
 from pathlib import Path
 
 from flask import Flask, send_file, render_template, flash, session, request, redirect, url_for
+from markupsafe import Markup, escape
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, BooleanField
 from wtforms.validators import Optional
 
-from extract_data import extract_excel_file, search_properties, find_comparables
+from extract_data import extract_excel_file, search_properties, find_comparables, find_comps
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 
@@ -30,6 +31,21 @@ class AccountForm(FlaskForm):
     submit = SubmitField("Search Properties")
 
 
+def highlight(text: str, needle: str):
+    """Return HTML with case-insensitive matches of needle wrapped in <mark>."""
+    if not text:
+        return ""
+    if not needle:
+        return escape(text)
+    import re
+    pattern = re.escape(needle)
+    def repl(m):
+        return f"<mark>{escape(m.group(0))}</mark>"
+    return Markup(re.sub(pattern, repl, text, flags=re.IGNORECASE))
+
+app.jinja_env.filters['highlight'] = highlight
+
+
 def delete_file_later(file_path: str, delay_seconds: int = 30):
     """Delete file after a delay in a background thread"""
     def delete_after_delay():
@@ -47,45 +63,90 @@ def delete_file_later(file_path: str, delay_seconds: int = 30):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    """Search & result page with pagination via query params."""
     form = AccountForm()
-    results = None
-    search_params = None
+    ALLOWED_PAGE_SIZES = [25, 50, 100, 200]
+    DEFAULT_PAGE_SIZE = 50
 
-    if form.validate_on_submit():
-        acct = form.acct.data or ""
-        owner = form.owner.data or ""
-        street = form.street.data or ""
-        zip_code = form.zip_code.data or ""
+    # POST -> validate then redirect to GET (PRG pattern) to avoid resubmits
+    if request.method == 'POST' and form.validate_on_submit():
+        acct = (form.acct.data or '').strip()
+        owner = (form.owner.data or '').strip()
+        street = (form.street.data or '').strip()
+        zip_code = (form.zip_code.data or '').strip()
         exact_match = form.exact_match.data
-
-        # At least one field must be provided
-        if not any([acct.strip(), owner.strip(), street.strip(), zip_code.strip()]):
-            flash("Please enter at least one search criteria.", "warning")
-            return render_template("index.html", form=form)
-
         try:
-            # Search for properties and return results for display
-            results = search_properties(acct, street, zip_code, owner, exact_match)
-            search_params = {'acct': acct, 'owner': owner, 'street': street, 'zip_code': zip_code, 'exact_match': exact_match}
-            
-            # Debug: Log search parameters and results count
-            match_type = "exact" if exact_match else "partial"
-            print(f"Search params - Account: '{acct}', Owner: '{owner}', Street: '{street}', Zip: '{zip_code}' (Match: {match_type})")
-            print(f"Found {len(results)} results")
-            if results:
-                print(f"First result: {results[0]}")
-            
-            if not results:
+            posted_page_size = int(request.form.get('page_size', DEFAULT_PAGE_SIZE))
+        except ValueError:
+            posted_page_size = DEFAULT_PAGE_SIZE
+        if posted_page_size not in ALLOWED_PAGE_SIZES:
+            posted_page_size = DEFAULT_PAGE_SIZE
+        if not any([acct, owner, street, zip_code]):
+            flash("Please enter at least one search criteria.", "warning")
+            return render_template("index.html", form=form, results=None, search_params=None)
+        # Redirect with query params
+        return redirect(url_for('index', acct=acct, owner=owner, street=street, zip_code=zip_code,
+                                exact_match=int(bool(exact_match)), page=1, page_size=posted_page_size))
+
+    # For GET populate form from query args
+    acct = request.args.get('acct', '').strip()
+    owner = request.args.get('owner', '').strip()
+    street = request.args.get('street', '').strip()
+    zip_code = request.args.get('zip_code', '').strip()
+    exact_match = request.args.get('exact_match', '').strip() in {'1', 'true', 'True'}
+    form.acct.data = acct
+    form.owner.data = owner
+    form.street.data = street
+    form.zip_code.data = zip_code
+    form.exact_match.data = exact_match
+
+    page = 1
+    try:
+        page = max(1, int(request.args.get('page', '1')))
+    except ValueError:
+        page = 1
+
+    results = None
+    total = 0
+    total_pages = 0
+    search_params = None
+    # Page size handling
+    try:
+        page_size = int(request.args.get('page_size', DEFAULT_PAGE_SIZE))
+    except ValueError:
+        page_size = DEFAULT_PAGE_SIZE
+    if page_size not in ALLOWED_PAGE_SIZES:
+        page_size = DEFAULT_PAGE_SIZE
+
+    if any([acct, owner, street, zip_code]):
+        try:
+            all_results = search_properties(acct, street, zip_code, owner, exact_match)
+            total = len(all_results)
+            if total == 0:
                 flash("No properties found matching your search criteria. Try using partial names or different spelling.", "info")
             else:
-                flash(f"Found {len(results)} properties matching your search.", "success")
-                # Store search params in session for download
-                session['last_search'] = search_params
-            
+                flash(f"Found {total} properties matching your search.", "success")
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            if page > total_pages:
+                page = total_pages
+            start = (page - 1) * page_size
+            end = start + page_size
+            results = all_results[start:end]
+            search_params = {
+                'acct': acct,
+                'owner': owner,
+                'street': street,
+                'zip_code': zip_code,
+                'exact_match': exact_match,
+            }
+            # Save for download (always keep full search params; re-run search on download)
+            session['last_search'] = {**search_params, 'page': page, 'total': total, 'page_size': page_size}
         except Exception as e:
             flash(f"Error searching properties: {str(e)}", "error")
 
-    return render_template("index.html", form=form, results=results, search_params=search_params)
+    return render_template("index.html", form=form, results=results, search_params=search_params,
+                           page=page, total=total, total_pages=total_pages, page_size=page_size,
+                           allowed_page_sizes=ALLOWED_PAGE_SIZES)
 
 
 @app.route("/download")
@@ -113,12 +174,13 @@ def download():
 @app.route("/comparables/<acct>")
 def comparables(acct: str):
     try:
-        comps = find_comparables(acct)
-        base = None
-        if comps:
-            subject_list = search_properties(acct)
-            base = subject_list[0] if subject_list else None
-        return render_template("comparables.html", acct=acct, subject=base, comparables=comps)
+        result = find_comps(acct, max_comps=7, min_comps=3)
+        subject = result.get('subject')
+        comps = result.get('comps', [])
+        meta = result.get('meta', {})
+        if not comps:
+            flash("No comparables found with current criteria (Phase 1).", "info")
+        return render_template("comparables.html", acct=acct, subject=subject, comparables=comps, meta=meta)
     except Exception as e:
         flash(f"Error finding comparables: {e}", "error")
         return redirect(url_for('index'))

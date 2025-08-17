@@ -1,276 +1,142 @@
 {% extends "base.html" %}
-
+{% block title %}HCAD Property Search{% endblock %}
 {% block content %}
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-                    {{ message }}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-            {% endfor %}
-        {% endif %}
-    {% endwith %}
-
-    <div class="jumbotron bg-light p-4 rounded">
-        <h1 class="display-4">Harris County Property Lookup</h1>
-    <p class="lead">Search for property information using account number, owner name, street name, or zip code.</p>
-        <hr class="my-4">
-    <p>Enter at least one search criteria to download property data. The system will generate an Excel (.xlsx) file with matching properties that you can open in Excel.</p>
-        
-        <div class="accordion" id="hintsAccordion">
-            <div class="accordion-item">
-                <h2 class="accordion-header" id="hintsHeading">
-                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#hintsCollapse">
-                        Search Tips
-                    </button>
-                </h2>
-                <div id="hintsCollapse" class="accordion-collapse collapse" data-bs-parent="#hintsAccordion">
-                    <div class="accordion-body">
-                        <ul>
-                            <li><strong>Account Number:</strong> Enter the first 5-6 digits to find properties in your area.</li>
-                            <li><strong>Owner Name:</strong> Enter part of the owner name (case-insensitive).</li>
-                            <li><strong>Street Name:</strong> Enter partial street names. Combine with zip code for better results.</li>
-                            <li><strong>Zip Code:</strong> Use alone to get all properties in an area, or combine with street name.</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
+<div class="row mb-4">
+  <div class="col-lg-10 mx-auto">
     <div class="card">
-        <div class="card-header">
-            <h3>Search Property Information</h3>
-        </div>
-        <div class="card-body">
-            <form method="POST">
-                {{ form.hidden_tag() }}
-                
-                <div class="row">
-                    <div class="col-md-3 mb-3">
-                        {{ form.acct.label(class="form-label") }}
-                        {{ form.acct(class="form-control") }}
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        {{ form.owner.label(class="form-label") }}
-                        {{ form.owner(class="form-control") }}
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        {{ form.street.label(class="form-label") }}
-                        {{ form.street(class="form-control") }}
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        {{ form.zip_code.label(class="form-label") }}
-                        {{ form.zip_code(class="form-control") }}
-                    </div>
-                </div>
-                
-                <div class="row mb-3">
-                    <div class="col-md-12">
-                        <div class="form-check">
-                            {{ form.exact_match(class="form-check-input", id="exact_match") }}
-                            {{ form.exact_match.label(class="form-check-label", for="exact_match") }}
-                            <small class="form-text text-muted">Check this box to search for exact street name matches only (no partial matches)</small>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="d-grid">
-                    {{ form.submit(class="btn btn-primary btn-lg") }}
-                </div>
-            </form>
-        </div>
+      <div class="card-header bg-primary text-white">Search Properties</div>
+      <div class="card-body">
+        <form method="post" class="row g-3 align-items-end" id="search-form">
+          {{ form.hidden_tag() }}
+          <div class="col-sm-4">
+            {{ form.acct.label(class_="form-label") }}
+            {{ form.acct(class_="form-control") }}
+          </div>
+          <div class="col-sm-4">
+            {{ form.owner.label(class_="form-label") }}
+            {{ form.owner(class_="form-control") }}
+          </div>
+          <div class="col-sm-3">
+            {{ form.street.label(class_="form-label") }}
+            {{ form.street(class_="form-control") }}
+          </div>
+          <div class="col-sm-2">
+            {{ form.zip_code.label(class_="form-label") }}
+            {{ form.zip_code(class_="form-control") }}
+          </div>
+          <div class="col-sm-3 form-check mt-4 ms-2">
+            {{ form.exact_match(class_="form-check-input") }} {{ form.exact_match.label(class_="form-check-label") }}
+          </div>
+          <div class="col-sm-2">
+            <label for="page_size" class="form-label">Page Size</label>
+            <select name="page_size" id="page_size" class="form-select">
+              {% for ps in allowed_page_sizes %}
+                <option value="{{ ps }}" {% if ps == page_size %}selected{% endif %}>{{ ps }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            {{ form.submit(class_="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
     </div>
+  </div>
+</div>
 
-    {% if results %}
-    <div class="card mt-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h4>Search Results ({{ results|length }} properties found)</h4>
-            <a href="{{ url_for('download') }}" class="btn btn-success">
-                <i class="fas fa-download"></i> Download as Excel
-            </a>
-        </div>
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Address <button class="btn btn-sm btn-outline-light ms-2" type="button" onclick="toggleAllDetails()">Show Details</button></th>
-                            <th>Owner</th>
-                            <th>Zip Code</th>
-                            <th>Rating</th>
-                            <th>Bedrooms</th>
-                            <th>Bathrooms</th>
-                            <th>Type</th>
-                            <th>Area</th>
-                            <th>Market Value</th>
-                            <th>$/Sq Ft</th>
-                            <th>Amenities</th>
-                            <th>Comparables</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for property in results %}
-                        <tr>
-                            <td><strong>{{ property['Address'] or 'N/A' }}</strong></td>
-                            <td>
-                                {% if property['Owner Name'] %}
-                                    <small class="text-dark">{{ property['Owner Name'] }}</small>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ property['Zip Code'] or 'N/A' }}</td>
-                            <td>
-                                {% if property['Overall Rating'] %}
-                                    <div class="d-flex align-items-center">
-                                        <span class="badge bg-warning text-dark me-1">{{ "{:.1f}".format(property['Overall Rating']|float) }}</span>
-                                        <small class="text-muted">
-                                            {% set rating = property['Overall Rating']|float %}
-                                            {% if rating >= 7.0 %}★★★★★
-                                            {% elif rating >= 6.0 %}★★★★☆
-                                            {% elif rating >= 5.0 %}★★★☆☆
-                                            {% elif rating >= 4.0 %}★★☆☆☆
-                                            {% else %}★☆☆☆☆
-                                            {% endif %}
-                                        </small>
-                                    </div>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Bedrooms'] %}
-                                    <span class="badge bg-primary">{{ property['Bedrooms'] }} BR</span>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Bathrooms'] %}
-                                    <span class="badge bg-info">{{ property['Bathrooms'] }} BA</span>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Property Type'] %}
-                                    <small class="text-success">{{ property['Property Type'] }}</small>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Building Area'] %}
-                                    {{ "{:,.0f}".format(property['Building Area']|float) }} sq ft
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Market Value'] %}
-                                    <strong class="text-success">${{ "{:,.0f}".format(property['Market Value']|float) }}</strong>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Price Per Sq Ft'] %}
-                                    ${{ "{:.2f}".format(property['Price Per Sq Ft']|float) }}
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Estimated Amenities'] %}
-                                    <small class="text-secondary">{{ property['Estimated Amenities'] }}</small>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if property['Account Number'] %}
-                                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('comparables', acct=property['Account Number']) }}">View</a>
-                                {% else %}
-                                    <span class="text-muted">N/A</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        <tr class="collapse" id="details{{ loop.index }}">
-                            <td colspan="12" class="bg-light">
-                                <div class="row">
-                                    <div class="col-md-4">
-                                        <strong>Property Details:</strong><br>
-                                        <small>
-                                            Built: {{ property['Build Year'] or 'N/A' }}<br>
-                                            Land Area: {{ "{:,.0f}".format(property['Land Area']|float) if property['Land Area'] else 'N/A' }} sq ft<br>
-                                            Property Type: {{ property['Property Type'] or 'N/A' }}<br>
-                                            Owner: {{ property['Owner Name'] or 'N/A' }}
-                                        </small>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <strong>Financial Details:</strong><br>
-                                        <small>
-                                            Land Value: ${{ "{:,.0f}".format(property['Land Value']|float) if property['Land Value'] else 'N/A' }}<br>
-                                            Building Value: ${{ "{:,.0f}".format(property['Building Value']|float) if property['Building Value'] else 'N/A' }}<br>
-                                            Account Number: {{ property['Account Number'] or 'N/A' }}
-                                        </small>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <strong>Rating Breakdown:</strong><br>
-                                        <small>
-                                            {% if property['Quality Rating'] %}
-                                                Quality: <span class="badge bg-secondary">{{ "{:.1f}".format(property['Quality Rating']|float) }}</span><br>
-                                            {% endif %}
-                                            {% if property['Value Rating'] %}
-                                                Value: <span class="badge bg-secondary">{{ "{:.1f}".format(property['Value Rating']|float) }}</span><br>
-                                            {% endif %}
-                                            {% if property['Rating Explanation'] %}
-                                                {{ property['Rating Explanation'] }}
-                                            {% endif %}
-                                        </small>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+{% if results %}
+  <div class="row">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header bg-secondary text-white">Results ({{ results|length }})</div>
+        <div class="table-responsive">
+          <div class="p-2 d-flex justify-content-between flex-wrap gap-2">
+            <div class="small text-muted">Showing {{ (page-1)*page_size + 1 if results and total>0 else 0 }} - {{ (page-1)*page_size + results|length if results }} of {{ total }}</div>
+            <div class="d-flex align-items-center gap-2">
+              <label for="client-filter" class="form-label mb-0 small">Filter current page</label>
+              <input id="client-filter" type="text" class="form-control form-control-sm minw-200" placeholder="Type to filter...">
+              <span class="badge bg-info text-dark d-none" id="filter-count"></span>
             </div>
+          </div>
+          <table class="table table-sm table-striped table-hover mb-0" id="results-table">
+            <thead class="table-light">
+              <tr>
+                <th>Acct</th><th>Owner</th><th>Address</th><th>Year</th><th>Beds</th><th>Baths</th><th>Sty</th><th>PPSF</th><th>Value</th><th>Amenities</th><th>Comps</th>
+              </tr>
+            </thead>
+            <tbody>
+            {% for r in results %}
+              <tr>
+                <td>{{ r.get('acct')|highlight(search_params.acct if search_params else '') }}</td>
+                <td>{% if search_params %}{{ r.get('owner_name','')|highlight(search_params.owner) }}{% else %}{{ r.get('owner_name','') }}{% endif %}</td>
+                <td>{% if search_params %}{{ (r.get('site_addr_1','') ~ ' ' ~ r.get('site_addr_3',''))|highlight(search_params.street) }}{% else %}{{ r.get('site_addr_1','') }} {{ r.get('site_addr_3','') }}{% endif %}</td>
+                <td>{{ r.get('build_year') }}</td>
+                <td>{{ r.get('bedrooms') }}</td>
+                <td>{{ r.get('bathrooms') }}</td>
+                <td>{{ r.get('stories') }}</td>
+                <td>{% if r.get('ppsf') %}${{ '%.2f'|format(r.get('ppsf')) }}{% else %}-{% endif %}</td>
+                <td>{% if r.get('market_value') %}${{ '{:,.0f}'.format(r.get('market_value')|float) }}{% else %}-{% endif %}</td>
+                <td class="text-truncate truncate-180">{{ r.get('amenities','') }}</td>
+                <td><a class="btn btn-outline-primary btn-sm show-loading" href="/comparables/{{ r.get('acct') }}">View</a></td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
         </div>
+        <div class="card-body">
+          <a class="btn btn-success" href="/download">Download results (Excel)</a>
+          {% if total_pages > 1 %}
+          <nav class="mt-3" aria-label="Search pagination">
+            <ul class="pagination pagination-sm mb-0"><!-- pagination list -->
+              {% if page > 1 %}
+              <li class="page-item"><a class="page-link pagination-link" href="{{ url_for('index', acct=search_params.acct, owner=search_params.owner, street=search_params.street, zip_code=search_params.zip_code, exact_match=(1 if search_params.exact_match else 0), page=page-1, page_size=page_size) }}">Prev</a></li>
+              {% else %}
+              <li class="page-item disabled"><span class="page-link">Prev</span></li>
+              {% endif %}
+              <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ total_pages }}</span></li>
+              {% if page < total_pages %}
+              <li class="page-item"><a class="page-link pagination-link" href="{{ url_for('index', acct=search_params.acct, owner=search_params.owner, street=search_params.street, zip_code=search_params.zip_code, exact_match=(1 if search_params.exact_match else 0), page=page+1, page_size=page_size) }}">Next</a></li>
+              {% else %}
+              <li class="page-item disabled"><span class="page-link">Next</span></li>
+              {% endif %}
+            </ul>
+          </nav>
+          {% endif %}
+        </div>
+      </div>
     </div>
-    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}
+{% block extra_scripts %}
+<script>
+// Auto-submit on page size change
+document.getElementById('page_size')?.addEventListener('change', function(){
+  const form = document.getElementById('search-form');
+  if(form){ form.requestSubmit(); }
+});
 
-    <div class="mt-4">
-        <small class="text-muted">
-            <strong>Note:</strong> Downloaded files are automatically deleted from the server after 1 minute for privacy. 
-            Data is sourced from Harris County Appraisal District.
-        </small>
-    </div>
-
-    <script>
-        let detailsVisible = false;
-        
-        function toggleAllDetails() {
-            const button = document.querySelector('button[onclick="toggleAllDetails()"]');
-            const detailRows = document.querySelectorAll('tr.collapse');
-            
-            if (detailsVisible) {
-                detailRows.forEach(row => {
-                    row.classList.remove('show');
-                });
-                button.textContent = 'Show Details';
-                detailsVisible = false;
-            } else {
-                detailRows.forEach(row => {
-                    row.classList.add('show');
-                });
-                button.textContent = 'Hide Details';
-                detailsVisible = true;
-            }
-        }
-    </script>
-
+// Client-side filtering for current page
+const filterInput = document.getElementById('client-filter');
+const table = document.getElementById('results-table');
+const counter = document.getElementById('filter-count');
+if(filterInput && table){
+  filterInput.addEventListener('input', function(){
+    const q = this.value.trim().toLowerCase();
+    let visible = 0; let totalRows = 0;
+    table.querySelectorAll('tbody tr').forEach(tr => {
+      totalRows++;
+      if(!q){ tr.style.display=''; visible++; return; }
+      const text = tr.textContent.toLowerCase();
+      if(text.indexOf(q) !== -1){ tr.style.display=''; visible++; } else { tr.style.display='none'; }
+    });
+    if(q){
+  counter.classList.remove('d-none');
+      counter.textContent = visible + ' / ' + totalRows;
+    } else {
+  counter.classList.add('d-none');
+    }
+  });
+}
+</script>
 {% endblock %}

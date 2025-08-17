@@ -10,8 +10,10 @@ import hashlib
 import json
 import os
 import requests
+import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # Setup paths
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
@@ -79,43 +81,57 @@ def main():
     year = datetime.now().strftime("%Y")
     
     # Define files to download
+    # GIS_Public.zip removed (Parcels content handled via direct Parcels.zip download with fallback)
     files_to_download = [
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/Real_building_land.zip",
-            "filename": "Real_building_land.zip",
-            "description": "Real Estate Building & Land Data"
-        },
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/Real_acct_owner.zip", 
-            "filename": "Real_acct_owner.zip",
-            "description": "Real Estate Account & Owner Data"
-        },
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/Hearing_files.zip",
-            "filename": "Hearing_files.zip", 
-            "description": "Hearing Files Data"
-        },
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/Code_description_real.zip",
-            "filename": "Code_description_real.zip",
-            "description": "Real Estate Code Descriptions"
-        },
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/PP_files.zip",
-            "filename": "PP_files.zip",
-            "description": "Personal Property Files"
-        },
-        {
-            "url": f"https://download.hcad.org/data/CAMA/{year}/Code_description_pp.zip",
-            "filename": "Code_description_pp.zip", 
-            "description": "Personal Property Code Descriptions"
-        },
-        {
-            "url": "https://download.hcad.org/data/GIS/GIS_Public.zip",
-            "filename": "GIS_Public.zip",
-            "description": "GIS Public Data"
-        }
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/Real_building_land.zip", "filename": "Real_building_land.zip", "description": "Real Estate Building & Land Data"},
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/Real_acct_owner.zip", "filename": "Real_acct_owner.zip", "description": "Real Estate Account & Owner Data"},
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/Hearing_files.zip", "filename": "Hearing_files.zip", "description": "Hearing Files Data"},
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/Code_description_real.zip", "filename": "Code_description_real.zip", "description": "Real Estate Code Descriptions"},
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/PP_files.zip", "filename": "PP_files.zip", "description": "Personal Property Files"},
+        {"url": f"https://download.hcad.org/data/CAMA/{year}/Code_description_pp.zip", "filename": "Code_description_pp.zip", "description": "Personal Property Code Descriptions"},
+        # Parcels.zip handled separately below for fallback logic but we keep it here for counting/download pass
+        {"url": "https://download.hcad.org/data/GIS/Parcels.zip", "filename": "Parcels.zip", "description": "GIS Parcels Shapefile (primary)"}
     ]
+
+    def first_bad_member(path: Path) -> Optional[str]:
+        try:
+            with zipfile.ZipFile(path, 'r') as zf:
+                return zf.testzip()
+        except Exception:
+            return '<<unreadable>>'
+
+    def download_parcels_with_fallback(primary_path: Path) -> tuple[Path, bool]:
+        """Ensure Parcels archive present & sane. Returns (path, backup_used). Does not hash-track backup."""
+        backup_used = False
+        primary_bad = False
+        if primary_path.exists():
+            bad = first_bad_member(primary_path)
+            if bad:
+                primary_bad = True
+                print(f"❌ Existing Parcels.zip appears corrupt (bad member: {bad})")
+        else:
+            # primary downloaded in normal loop; if missing we treat as needing download
+            pass
+        if primary_bad:
+            backup_year = int(year) - 1
+            backup_url = f"https://download.hcad.org/data/GIS/Parcels_{backup_year}_Oct.zip"
+            backup_name = f"Parcels_{backup_year}_Oct.zip"
+            backup_path = DOWNLOADS_DIR / backup_name
+            if backup_path.exists():
+                print(f"🔁 Using existing backup archive {backup_name}")
+            else:
+                print(f"🔁 Downloading backup archive {backup_url}")
+                if not download_file(backup_url, backup_path, f"Backup Parcels {backup_year} October"):
+                    print("🛑 Failed to obtain backup Parcels archive.")
+                    return primary_path, False
+            bad_b = first_bad_member(backup_path)
+            if bad_b:
+                print(f"❌ Backup archive also corrupt (bad member: {bad_b}). Proceeding with original corrupt file.")
+                return primary_path, False
+            print(f"✅ Backup Parcels archive verified: {backup_name}")
+            backup_used = True
+            return backup_path, backup_used
+        return primary_path, backup_used
     
     # Load existing hashes
     existing_hashes = load_existing_hashes()
@@ -143,20 +159,38 @@ def main():
         
         if should_download:
             if download_file(url, output_path, description):
-                # Calculate and store hash
-                file_hash = calculate_file_hash(output_path)
-                current_hashes[filename] = file_hash
+                # For Parcels.zip we may apply fallback afterwards; hash only if accepted primary
+                if filename != 'Parcels.zip':
+                    file_hash = calculate_file_hash(output_path)
+                    current_hashes[filename] = file_hash
                 files_downloaded += 1
             else:
                 print(f"⚠️  Failed to download {filename}")
     
-    # Save updated hashes
+    # Post-process Parcels fallback (after potential primary download)
+    parcels_primary = DOWNLOADS_DIR / 'Parcels.zip'
+    if parcels_primary.exists():
+        resolved_parcels_path, backup_used = download_parcels_with_fallback(parcels_primary)
+        if resolved_parcels_path.name == 'Parcels.zip':
+            # Only now compute/store hash if not already stored and not corrupt
+            if 'Parcels.zip' not in current_hashes:
+                if not first_bad_member(resolved_parcels_path):
+                    current_hashes['Parcels.zip'] = calculate_file_hash(resolved_parcels_path)
+                else:
+                    print("⚠️  Skipping hash store for corrupt Parcels.zip")
+        else:
+            # Backup used; deliberately do NOT store hash so future runs re-check when primary is fixed
+            print(f"ℹ️  Fallback Parcels archive in use ({resolved_parcels_path.name}); hash not persisted.")
+    else:
+        print("⚠️  Parcels.zip missing after download phase.")
+
+    # Save updated hashes (excluding backup parcels if used)
     save_hashes(current_hashes)
     
     print(f"\n📊 Download Summary:")
     print(f"  Files downloaded: {files_downloaded}")
     print(f"  Files skipped (up to date): {files_skipped}")
-    print(f"  Total files: {len(files_to_download)}")
+    print(f"  Total primary files (excluding potential backup): {len(files_to_download)}")
     
     if files_downloaded > 0:
         print(f"\n✅ Download complete! Files saved to: {DOWNLOADS_DIR}")
