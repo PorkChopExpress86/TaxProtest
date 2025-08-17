@@ -600,7 +600,12 @@ def find_comparables(acct: str, max_distance_miles: float = 15.0, size_tolerance
         cur.close(); conn.close()
 
 
-def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, strategy: str = "equity") -> Dict:
+def find_comps(subject_account: str,
+               max_comps: int = 25,
+               min_comps: int = 20,
+               strategy: str = "equity",
+               radius_first_strict: bool = False,
+               max_radius: float | None = None) -> Dict:
     """Phase 1 comparable selection.
 
     Implements:
@@ -678,6 +683,11 @@ def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, s
         year_bands = [5, 10, 15, 20, 30, None]
         bed_bath_bands = [1, 2, 3, None]  # None => ignore bed/bath deltas
         radius_tiers = [1.5, 3, 5, 10, 15, 20, 25]
+        if max_radius is not None:
+            try:
+                radius_tiers = [r for r in radius_tiers if r <= float(max_radius)] or radius_tiers
+            except Exception:
+                pass
         comps: List[Dict] = []
         # Additional attribute bands (Phase 2)
         story_tolerances = [0, 1, 2, None] if (s_stories is not None and str(s_stories).strip() != '') else [None]
@@ -698,6 +708,17 @@ def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, s
             'subject_has_geo': bool(s_lat is not None and s_lon is not None),
             'used_neighborhood': False,
             'scoring_weights': {'distance':0.4,'size':0.25,'year':0.1,'beds_baths':0.1,'stories':0.05,'pool_garage':0.1}
+        }
+        # Baseline (strict) band label mapping for relaxation analysis
+        baseline_story = '±0' if (s_stories is not None and str(s_stories).strip()!='') else 'any'
+        baseline_meta_labels = {
+            'size_band': '±5%',
+            'lot_band': '±10%',
+            'year_band': '±5y',
+            'bed_bath_band': '±1',
+            'story_band': baseline_story,
+            'pool_rule': 'match',
+            'garage_rule': 'match'
         }
         # Helper to evaluate candidate against current bands
         def passes(candidate, story_tol, pool_mode, garage_mode):
@@ -788,6 +809,128 @@ def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, s
                 geo_sequences.append((f'radius', r, lambda rr=r: radius_candidates(rr)))
         geo_sequences.append(('zip', None, zip_candidates))
         attempts = 0
+
+        # Optional radius-first strict pass: try each geo tier with ONLY baseline strict bands before any relaxations.
+        if radius_first_strict:
+            strict_selected = None
+            for geo_label, radius_val, producer in geo_sequences:
+                attempts += 1
+                candidates_all = producer()
+                # Distance map
+                dist_map = {}
+                if s_lat and s_lon:
+                    for cand in candidates_all:
+                        c_lat, c_lon = cand[14], cand[15]
+                        if c_lat is not None and c_lon is not None:
+                            try:
+                                dist_map[cand[0]] = haversine(float(s_lat), float(s_lon), float(c_lat), float(c_lon))
+                            except: pass
+                # Baseline filters (first element of each band list)
+                size_band = size_bands[0]
+                lot_band = lot_bands[0]
+                year_band = year_bands[0]
+                bed_bath_band = bed_bath_bands[0]
+                story_tol = story_tolerances[0]
+                pool_mode = pool_modes[0]
+                garage_mode = garage_modes[0]
+                selected = []
+                for cand in candidates_all:
+                    if passes(cand, story_tol, pool_mode, garage_mode):
+                        (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
+                         c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = cand
+                        if radius_val is not None and s_lat and s_lon and c_acct in dist_map:
+                            if dist_map[c_acct] > radius_val:
+                                continue
+                        rec = {
+                            'acct': c_acct,
+                            'site_addr_1': c_addr1,
+                            'site_addr_3': c_zipc,
+                            'market_value': c_mval,
+                            'land_area': c_land_ar,
+                            'building_area': c_im_sq_ft,
+                            'build_year': c_eff_year,
+                            'bedrooms': c_beds,
+                            'bathrooms': c_baths,
+                            'stories': c_stories,
+                            'has_pool': c_pool,
+                            'has_garage': c_garage,
+                            'amenities': c_amen,
+                            'property_type': c_type,
+                            'overall_rating': c_overall,
+                            'quality_rating': c_quality,
+                            'rating_explanation': c_rating_expl,
+                            'distance_miles': round(dist_map.get(c_acct, 0.0), 2) if c_acct in dist_map else None
+                        }
+                        try:
+                            if c_im_sq_ft and c_im_sq_ft not in ('','0') and c_mval and c_mval not in ('','0'):
+                                rec['ppsf'] = round(float(c_mval)/float(c_im_sq_ft),2)
+                        except: pass
+                        selected.append(rec)
+                        if len(selected) >= max_comps:
+                            break
+                if len(selected) >= min_comps:
+                    strict_selected = selected
+                    chosen_meta.update({
+                        'geo_tier': geo_label,
+                        'radius_miles': radius_val,
+                        'size_band': f"±{int(size_band*100)}%",
+                        'lot_band': f"±{int(lot_band*100)}%",
+                        'year_band': f"±{year_band}y",
+                        'bed_bath_band': f"±{bed_bath_band}",
+                        'story_band': ('any' if story_tol is None else f"±{story_tol}"),
+                        'pool_rule': pool_mode,
+                        'garage_rule': garage_mode,
+                        'attempts': attempts,
+                        'used_neighborhood': geo_label == 'neighborhood'
+                    })
+                    comps = strict_selected
+                    # Score & return immediately
+                    def compute_score(r):
+                        w=chosen_meta['scoring_weights']; penalties=0.0
+                        try:
+                            if r.get('distance_miles') is not None:
+                                penalties += w['distance'] * min(1.0, float(r['distance_miles'])/15.0)
+                        except: pass
+                        try:
+                            if base_im and r.get('building_area') and r.get('building_area') not in ('','0'):
+                                sdelta=abs(float(r['building_area'])-base_im)/base_im
+                                penalties += w['size'] * min(1.0, sdelta/0.30)
+                        except: pass
+                        try:
+                            if base_year and r.get('build_year') and str(r.get('build_year')).isdigit():
+                                ydelta=abs(int(r['build_year'])-base_year)
+                                penalties += w['year'] * min(1.0, ydelta/15.0)
+                        except: pass
+                        try:
+                            if base_beds and r.get('bedrooms') not in (None,''):
+                                penalties += w['beds_baths'] * (min(2.0, abs(float(r['bedrooms'])-base_beds))/2.0)
+                        except: pass
+                        try:
+                            if base_baths and r.get('bathrooms') not in (None,''):
+                                penalties += w['beds_baths'] * (min(2.0, abs(float(r['bathrooms'])-base_baths))/2.0)
+                        except: pass
+                        try:
+                            if s_stories and r.get('stories') not in (None,''):
+                                penalties += w['stories'] * min(1.0, abs(int(r['stories'])-int(s_stories)))
+                        except: pass
+                        if s_has_pool in (0,1) and r.get('has_pool') in (0,1) and int(r['has_pool'])!=int(s_has_pool):
+                            penalties += w['pool_garage']*0.5
+                        if s_has_garage in (0,1) and r.get('has_garage') in (0,1) and int(r['has_garage'])!=int(s_has_garage):
+                            penalties += w['pool_garage']*0.5
+                        return round(100 * (1 - min(0.99, penalties)),2)
+                    for r in comps:
+                        r['score']=compute_score(r)
+                    comps.sort(key=lambda r:(-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
+                    # Mark baseline & relaxed flags
+                    chosen_meta['baseline'] = baseline_meta_labels
+                    relaxed = {}
+                    for k,v in baseline_meta_labels.items():
+                        try:
+                            relaxed[k] = (chosen_meta.get(k) != v)
+                        except: relaxed[k] = None
+                    chosen_meta['relaxed'] = relaxed
+                    return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
+            # Continue to full relaxation search if strict radius-first failed
         for geo_label, radius_val, producer in geo_sequences:
             candidates_all = producer()
             dist_map = {}
@@ -902,9 +1045,25 @@ def find_comps(subject_account: str, max_comps: int = 25, min_comps: int = 20, s
                                             for r in comps:
                                                 r['score']=compute_score(r)
                                             comps.sort(key=lambda r:(-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
+                                            # mark baseline & relaxed flags
+                                            chosen_meta['baseline'] = baseline_meta_labels
+                                            relaxed = {}
+                                            for k,v in baseline_meta_labels.items():
+                                                try:
+                                                    relaxed[k] = (chosen_meta.get(k) != v)
+                                                except: relaxed[k] = None
+                                            chosen_meta['relaxed'] = relaxed
                                             return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
                                             # end if len(selected) >= min_comps
         chosen_meta['attempts'] = attempts
+        # Even if no comps, add baseline & relaxed markers (all None)
+        chosen_meta['baseline'] = baseline_meta_labels
+        relaxed = {}
+        for k,v in baseline_meta_labels.items():
+            try:
+                relaxed[k] = (chosen_meta.get(k) is not None and chosen_meta.get(k) != v)
+            except: relaxed[k] = None
+        chosen_meta['relaxed'] = relaxed
         return {'subject': subject, 'comps': comps, 'meta': chosen_meta}
     finally:
         cur.close(); conn.close()

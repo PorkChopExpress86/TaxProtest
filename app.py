@@ -174,13 +174,36 @@ def download():
 @app.route("/comparables/<acct>")
 def comparables(acct: str):
     try:
-        result = find_comps(acct, max_comps=7, min_comps=3)
+        # User-configurable overrides via query string
+        try:
+            max_comps = int(request.args.get('max', '25'))
+        except ValueError:
+            max_comps = 25
+        try:
+            min_comps = int(request.args.get('min', '20'))
+        except ValueError:
+            min_comps = 20
+        if min_comps > max_comps:
+            min_comps = max_comps
+        try:
+            max_radius = request.args.get('max_radius')
+            max_radius_f = float(max_radius) if max_radius not in (None, '', '0') else None
+        except ValueError:
+            max_radius_f = None
+        radius_first_strict = request.args.get('strict_first', '0') in {'1','true','True'}
+
+        result = find_comps(acct,
+                             max_comps=max_comps,
+                             min_comps=min_comps,
+                             radius_first_strict=radius_first_strict,
+                             max_radius=max_radius_f)
         subject = result.get('subject')
         comps = result.get('comps', [])
         meta = result.get('meta', {})
         if not comps:
-            flash("No comparables found with current criteria (Phase 1).", "info")
-        return render_template("comparables.html", acct=acct, subject=subject, comparables=comps, meta=meta)
+            flash("No comparables found with current criteria.", "info")
+        return render_template("comparables.html", acct=acct, subject=subject, comparables=comps, meta=meta,
+                               cfg={'max':max_comps,'min':min_comps,'max_radius':max_radius_f,'strict_first':radius_first_strict})
     except Exception as e:
         flash(f"Error finding comparables: {e}", "error")
         return redirect(url_for('index'))

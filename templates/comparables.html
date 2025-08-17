@@ -6,13 +6,55 @@
   <a class="btn btn-link show-loading" href="/">&larr; Back to Search</a>
     <h2>Comparables for <code>{{ acct }}</code></h2>
     {% if meta %}
-    <div class="alert alert-info small mb-0">
-      Geo: {{ meta.geo_tier or 'n/a' }}{% if meta.radius_miles %} ({{ meta.radius_miles }} mi){% endif %}
-  | Size {{ meta.size_band or 'n/a' }}, Lot {{ meta.lot_band or 'n/a' }}, Year {{ meta.year_band or 'n/a' }}, Beds/Baths {{ meta.bed_bath_band or 'n/a' }}
-      | Stories {{ meta.story_band or 'n/a' }}, Pool {{ meta.pool_rule or 'n/a' }}, Garage {{ meta.garage_rule or 'n/a' }}
-      | Attempts {{ meta.attempts }}
-  {% if meta.scoring_weights %}<br/>Weights: dist {{ meta.scoring_weights.distance }}, size {{ meta.scoring_weights.size }}, year {{ meta.scoring_weights.year }}, beds/baths {{ meta.scoring_weights.beds_baths }}, stories {{ meta.scoring_weights.stories }}, pool/gar {{ meta.scoring_weights.pool_garage }}{% endif %}
+    <div class="alert alert-info small mb-2">
+      <div>
+        <strong>Geo:</strong> {{ meta.geo_tier or 'n/a' }}{% if meta.radius_miles %} ({{ meta.radius_miles }} mi){% endif %}
+        | <strong>Size</strong> {{ meta.size_band or 'n/a' }}
+        | <strong>Lot</strong> {{ meta.lot_band or 'n/a' }}
+        | <strong>Year</strong> {{ meta.year_band or 'n/a' }}
+        | <strong>Beds/Baths</strong> {{ meta.bed_bath_band or 'n/a' }}
+        | <strong>Stories</strong> {{ meta.story_band or 'n/a' }}
+        | <strong>Pool</strong> {{ meta.pool_rule or 'n/a' }}
+        | <strong>Garage</strong> {{ meta.garage_rule or 'n/a' }}
+        | <strong>Attempts</strong> {{ meta.attempts }}
+      </div>
+      {% if meta.baseline and meta.relaxed %}
+      <div class="mt-1">
+        <strong>Relaxed:</strong>
+        {% for k,v in meta.relaxed.items() %}
+          {% if k in ['size_band','lot_band','year_band','bed_bath_band','story_band','pool_rule','garage_rule'] %}
+            <span class="badge bg-{{ 'danger' if v else 'success' }} me-1">{{ k.replace('_',' ') }} {{ 'relaxed' if v else 'base' }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if meta.scoring_weights %}
+      <div class="mt-1">
+        <strong>Weights:</strong> dist {{ meta.scoring_weights.distance }}, size {{ meta.scoring_weights.size }}, year {{ meta.scoring_weights.year }}, beds/baths {{ meta.scoring_weights.beds_baths }}, stories {{ meta.scoring_weights.stories }}, pool/gar {{ meta.scoring_weights.pool_garage }}
+      </div>
+      {% endif %}
     </div>
+    <form method="get" class="row g-2 align-items-end mb-3" action="{{ url_for('comparables', acct=acct) }}">
+      <div class="col-auto">
+        <label class="form-label mb-0 small">Min comps</label>
+  <input type="number" class="form-control form-control-sm" name="min" value="{{ cfg.min if cfg else 20 }}" min="1" max="50" placeholder="min" title="Minimum desired comparables" />
+      </div>
+      <div class="col-auto">
+        <label class="form-label mb-0 small">Max comps</label>
+  <input type="number" class="form-control form-control-sm" name="max" value="{{ cfg.max if cfg else 25 }}" min="1" max="50" placeholder="max" title="Maximum comparables to return" />
+      </div>
+      <div class="col-auto">
+        <label class="form-label mb-0 small">Max radius (mi)</label>
+  <input type="number" step="0.1" class="form-control form-control-sm" name="max_radius" value="{{ cfg.max_radius if cfg and cfg.max_radius is not none else '' }}" placeholder="(default)" title="Cap search radius (miles)" />
+      </div>
+      <div class="col-auto form-check mt-4 pt-1">
+        <input class="form-check-input" type="checkbox" id="strict_first" name="strict_first" value="1" {% if cfg.strict_first %}checked{% endif %} />
+        <label class="form-check-label small" for="strict_first">Strict pass first</label>
+      </div>
+      <div class="col-auto mt-4 pt-1">
+  <button type="submit" class="btn btn-sm btn-primary">Recompute</button>
+      </div>
+    </form>
     {% endif %}
   </div>
 </div>
