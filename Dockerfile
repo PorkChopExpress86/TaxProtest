@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project metadata and install deps first (better layer caching)
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY requirements.txt ./
 
 # Install runtime dependencies (gunicorn added to requirements.txt)
