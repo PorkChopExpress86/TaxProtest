@@ -3,20 +3,31 @@ version: "3.9"
 services:
   taxprotest:
     image: taxprotest:latest
-    # Build from local Dockerfile (uncomment build if you want compose to build)
     build: .
     container_name: taxprotest
     environment:
-      TAXPROTEST_SECRET_KEY: "change-me"        # override in real deployments or via .env
-      TAXPROTEST_DEBUG: "0"                     # keep 0 in production
-      TAXPROTEST_HOST: "0.0.0.0"                # gunicorn bind host (kept for clarity)
-      TAXPROTEST_PORT: "8000"                   # internal app port (matches gunicorn CMD)
+      TAXPROTEST_SECRET_KEY: "change-me"
+      TAXPROTEST_DEBUG: "0"
+      TAXPROTEST_HOST: "0.0.0.0"
+      TAXPROTEST_PORT: "8000"
     ports:
-      - "5001:8000"   # host:container (change left side if 5001 in use)
+      - "5001:8000"
     volumes:
-      - ./data:/app/data
-      - ./Exports:/app/Exports
+      - data_volume:/app/data
+      - exports_volume:/app/Exports
     restart: unless-stopped
+
+  refresh:
+    image: taxprotest:latest
+    build: .
+    depends_on:
+      - taxprotest
+    # Runs the smart orchestrator then exits (use: docker compose run --rm refresh)
+    command: ["python", "refresh.py"]
+    volumes:
+      - data_volume:/app/data
+      - exports_volume:/app/Exports
+    profiles: ["maintenance"]
     # Optional basic healthcheck (adds ~3–5 MB if curl not present; if you add curl to image)
     # healthcheck:
     #   test: ["CMD", "wget", "-qO", "-", "http://localhost:8000/health"]
@@ -26,6 +37,6 @@ services:
     #   start_period: 20s
 
 # Add a named volume section if you prefer docker-managed volumes instead of bind mounts:
-# volumes:
-#   data:
-#   exports:
+volumes:
+  data_volume:
+  exports_volume:
