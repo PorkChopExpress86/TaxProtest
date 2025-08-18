@@ -301,3 +301,9 @@ def export_comparables_route(acct: str):  # type: ignore[no-untyped-def]
     except Exception as e:  # pragma: no cover
         flash(f"Error exporting comparables: {e}", "error")
         return redirect(url_for("main.comparables", acct=acct))
+
+
+# Simple health endpoint for container orchestrators (K8s, ECS, etc.)
+@bp.route("/health")
+def health():  # type: ignore[no-untyped-def]
+    return {"status": "ok"}
