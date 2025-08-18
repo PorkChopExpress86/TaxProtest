@@ -37,6 +37,7 @@ RUN pip install --upgrade pip && \
 COPY src ./src
 COPY templates ./templates
 COPY static ./static
+COPY setup_complete.py step1_download.py step2_extract.py step3_import.py ./
 
 # Install the project package (no dependency re-resolution)
 RUN pip install --no-deps .
