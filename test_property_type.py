@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("Legacy duplicate test file; use tests/integration/test_property_type.py", allow_module_level=True)
+
 import unittest
 import sqlite3
 

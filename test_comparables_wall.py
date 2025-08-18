@@ -1,3 +1,6 @@
+import pytest
+pytest.skip("Legacy duplicate test file; use tests/integration/test_comparables_wall.py", allow_module_level=True)
+
 import unittest, sqlite3
 from extract_data import find_comparables, find_comparables_debug
 

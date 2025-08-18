@@ -1,4 +1,7 @@
-from comparables.scoring import compute_score
+import pytest
+pytest.skip("Legacy duplicate test file; use tests/unit/test_scoring.py", allow_module_level=True)
+
+from taxprotest.comparables.scoring import compute_score
 
 
 def test_compute_score_no_penalties():

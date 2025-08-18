@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taxprotest"
+version = "0.1.0"
+description = "HCAD tax protest tooling"
+requires-python = ">=3.13"
+readme = "README.md"
+dependencies = [
+  "flask",
+  "flask-wtf",
+  "pydantic>=2,<3",
+  "pydantic-settings>=2,<3"
+]
+
+[project.scripts]
+taxprotest-app = "taxprotest.app.__main__:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+select = ["E","F","I","UP","B","C4","SIM","PL"]
+fix = true
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "mypy",
+  "ruff",
+  "black",
+  "types-requests",
+  "pandas",
+  "openpyxl",
+]
+export = [
+  "pandas",
+  "openpyxl",
+]
+pyhcad = [
+  "selenium",
+  "webdriver-manager",
+  "geopandas",
+  "pandas",
+  "chardet"
+]
+
+[tool.mypy]
+python_version = "3.13"
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_optional = true
+show_error_codes = true
+pretty = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

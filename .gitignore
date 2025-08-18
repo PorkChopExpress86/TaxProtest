@@ -3,6 +3,10 @@ downloads/*
 !downloads/.gitkeep
 extracted/*
 !extracted/.gitkeep
+downloads_test/*
+scripts/downloads_test/*
+extracted_test/*
+partial_parcels.dbf
 data/*
 !data/.gitkeep
 Exports/*
@@ -57,3 +61,7 @@ Explore_data.ipynb
 # Flask
 instance/
 .webassets-cache
+
+# Legacy root tests & temp scripts (now under tests/)
+test_*.py
+tmp_*.py

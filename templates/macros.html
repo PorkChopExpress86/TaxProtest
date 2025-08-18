@@ -1,0 +1,37 @@
+{% macro pagination(endpoint, page, total_pages, page_size, search_params, allowed_page_sizes) %}
+  {% if total_pages > 1 %}
+  <nav class="mt-3" aria-label="Search pagination">
+    <ul class="pagination pagination-sm mb-0">
+      <li class="page-item{% if page <= 1 %} disabled{% endif %}">
+        {% if page > 1 %}
+          <a class="page-link" href="{{ url_for(endpoint,
+            acct=search_params.acct,
+            owner=search_params.owner,
+            street=search_params.street,
+            zip_code=search_params.zip_code,
+            exact_match=(1 if search_params.exact_match else 0),
+            page=page-1,
+            page_size=page_size) }}">Prev</a>
+        {% else %}
+          <span class="page-link">Prev</span>
+        {% endif %}
+      </li>
+      <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ total_pages }}</span></li>
+      <li class="page-item{% if page >= total_pages %} disabled{% endif %}">
+        {% if page < total_pages %}
+          <a class="page-link" href="{{ url_for(endpoint,
+            acct=search_params.acct,
+            owner=search_params.owner,
+            street=search_params.street,
+            zip_code=search_params.zip_code,
+            exact_match=(1 if search_params.exact_match else 0),
+            page=page+1,
+            page_size=page_size) }}">Next</a>
+        {% else %}
+          <span class="page-link">Next</span>
+        {% endif %}
+      </li>
+    </ul>
+  </nav>
+  {% endif %}
+{% endmacro %}

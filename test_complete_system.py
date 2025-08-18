@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import pytest
+pytest.skip("Legacy duplicate test file; use tests/integration/test_complete_system.py", allow_module_level=True)
 
 import sys
 sys.path.append('.')

@@ -1,4 +1,7 @@
-from comparables.stats import compute_pricing_stats
+import pytest
+pytest.skip("Legacy duplicate test file; use tests/unit/test_pricing_stats.py", allow_module_level=True)
+
+from taxprotest.comparables.stats import compute_pricing_stats  # renamed duplicate (legacy)
 
 
 def test_compute_pricing_stats_empty():

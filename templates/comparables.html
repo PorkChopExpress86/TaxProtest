@@ -34,7 +34,7 @@
       </div>
       {% endif %}
     </div>
-    <form method="get" class="row g-2 align-items-end mb-3" action="{{ url_for('comparables', acct=acct) }}">
+  <form method="get" class="row g-2 align-items-end mb-3" action="{{ url_for('main.comparables', acct=acct) }}">
       <div class="col-auto">
         <label class="form-label mb-0 small">Min comps</label>
   <input type="number" class="form-control form-control-sm" name="min" value="{{ cfg.min if cfg else 20 }}" min="1" max="50" placeholder="min" title="Minimum desired comparables" />
@@ -57,8 +57,8 @@
     </form>
     {% if comparables %}
     <div class="mb-3">
-      <a class="btn btn-sm btn-outline-success me-2" href="{{ url_for('export_comparables_route', acct=acct, fmt='xlsx', max=cfg.max, min=cfg.min, max_radius=cfg.max_radius, strict_first=1 if cfg.strict_first else 0) }}">Export Excel</a>
-      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_comparables_route', acct=acct, fmt='csv', max=cfg.max, min=cfg.min, max_radius=cfg.max_radius, strict_first=1 if cfg.strict_first else 0) }}">Export CSV</a>
+  <a class="btn btn-sm btn-outline-success me-2" href="{{ url_for('main.export_comparables_route', acct=acct, fmt='xlsx', max=cfg.max, min=cfg.min, max_radius=cfg.max_radius, strict_first=1 if cfg.strict_first else 0) }}">Export Excel</a>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('main.export_comparables_route', acct=acct, fmt='csv', max=cfg.max, min=cfg.min, max_radius=cfg.max_radius, strict_first=1 if cfg.strict_first else 0) }}">Export CSV</a>
     </div>
     {% endif %}
     {% endif %}

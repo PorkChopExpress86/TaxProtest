@@ -77,31 +77,16 @@
                 <td>{% if r.get('ppsf') %}${{ '%.2f'|format(r.get('ppsf')) }}{% else %}-{% endif %}</td>
                 <td>{% if r.get('market_value') %}${{ '{:,.0f}'.format(r.get('market_value')|float) }}{% else %}-{% endif %}</td>
                 <td class="text-truncate truncate-180">{{ r.get('amenities','') }}</td>
-                <td><a class="btn btn-outline-primary btn-sm show-loading" href="/comparables/{{ r.get('acct') }}">View</a></td>
+                <td><a class="btn btn-outline-primary btn-sm show-loading" href="{{ url_for('main.comparables', acct=r.get('acct')) }}">View</a></td>
               </tr>
             {% endfor %}
             </tbody>
           </table>
         </div>
         <div class="card-body">
-          <a class="btn btn-success" href="/download">Download results (Excel)</a>
-          {% if total_pages > 1 %}
-          <nav class="mt-3" aria-label="Search pagination">
-            <ul class="pagination pagination-sm mb-0"><!-- pagination list -->
-              {% if page > 1 %}
-              <li class="page-item"><a class="page-link pagination-link" href="{{ url_for('index', acct=search_params.acct, owner=search_params.owner, street=search_params.street, zip_code=search_params.zip_code, exact_match=(1 if search_params.exact_match else 0), page=page-1, page_size=page_size) }}">Prev</a></li>
-              {% else %}
-              <li class="page-item disabled"><span class="page-link">Prev</span></li>
-              {% endif %}
-              <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ total_pages }}</span></li>
-              {% if page < total_pages %}
-              <li class="page-item"><a class="page-link pagination-link" href="{{ url_for('index', acct=search_params.acct, owner=search_params.owner, street=search_params.street, zip_code=search_params.zip_code, exact_match=(1 if search_params.exact_match else 0), page=page+1, page_size=page_size) }}">Next</a></li>
-              {% else %}
-              <li class="page-item disabled"><span class="page-link">Next</span></li>
-              {% endif %}
-            </ul>
-          </nav>
-          {% endif %}
+          <a class="btn btn-success" href="{{ url_for('main.download') }}">Download results (Excel)</a>
+          {% import 'macros.html' as m %}
+          {{ m.pagination('main.index', page, total_pages, page_size, search_params, allowed_page_sizes) }}
         </div>
       </div>
     </div>

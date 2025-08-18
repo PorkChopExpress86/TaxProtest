@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 # Import refactored comparables modules
-from comparables import find_comps, export_comparables  # compute_pricing_stats used via find_comps meta
+from taxprotest.comparables import find_comps, export_comparables  # compute_pricing_stats used via find_comps meta
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 TEXT_DIR = BASE_DIR / "text_files"
