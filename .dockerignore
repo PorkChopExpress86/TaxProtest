@@ -40,5 +40,6 @@ scripts/
 **/tmp_*.py
 test_*.py
 tests/
-README.md
 Dockerfile
+# Keep README (required by pyproject metadata)
+!README.md

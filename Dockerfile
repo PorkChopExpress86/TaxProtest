@@ -25,19 +25,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project metadata and install deps first (better layer caching)
-COPY pyproject.toml ./
+# Copy project metadata only first (maximize layer cache for deps)
+COPY pyproject.toml README.md ./
 COPY requirements.txt ./
 
-# Install runtime dependencies (gunicorn added to requirements.txt)
+# Install third-party dependencies
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    pip install .
+    pip install -r requirements.txt
 
-# Copy application source & templates/static
+# Copy application source and assets
 COPY src ./src
 COPY templates ./templates
 COPY static ./static
+
+# Install the project package (no dependency re-resolution)
+RUN pip install --no-deps .
 
 # Create unprivileged user
 RUN useradd -u 1001 -m appuser
