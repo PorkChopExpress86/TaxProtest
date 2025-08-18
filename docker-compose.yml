@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  taxprotest:
+    image: taxprotest:latest
+    # Build from local Dockerfile (uncomment build if you want compose to build)
+    build: .
+    container_name: taxprotest
+    environment:
+      TAXPROTEST_SECRET_KEY: "change-me"        # override in real deployments or via .env
+      TAXPROTEST_DEBUG: "0"                     # keep 0 in production
+      TAXPROTEST_HOST: "0.0.0.0"                # gunicorn bind host (kept for clarity)
+      TAXPROTEST_PORT: "8000"                   # internal app port (matches gunicorn CMD)
+    ports:
+      - "5001:8000"   # host:container (change left side if 5001 in use)
+    volumes:
+      - ./data:/app/data
+      - ./Exports:/app/Exports
+    restart: unless-stopped
+    # Optional basic healthcheck (adds ~3–5 MB if curl not present; if you add curl to image)
+    # healthcheck:
+    #   test: ["CMD", "wget", "-qO", "-", "http://localhost:8000/health"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 20s
+
+# Add a named volume section if you prefer docker-managed volumes instead of bind mounts:
+# volumes:
+#   data:
+#   exports:
