@@ -1,0 +1,5 @@
+Django>=4.2,<5
+psycopg-binary
+gunicorn
+django-environ
+django-crispy-forms
