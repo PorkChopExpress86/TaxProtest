@@ -1,11 +1,21 @@
 from __future__ import annotations
 import sqlite3
-from typing import Dict, Any, List, Optional, Tuple
+import math
+from itertools import product
+from typing import Dict, Any, List, Optional, Tuple, Iterable, Callable
+
 from .stats import compute_pricing_stats
 from .scoring import compute_score
-import math
-from .config import (SIZE_BANDS, LOT_BANDS, YEAR_BANDS, BED_BATH_BANDS, RADIUS_TIERS,
-                      STORY_TOLERANCES, SCORING_WEIGHTS, CACHE_MAX_ENTRIES)
+from .config import (
+    SIZE_BANDS,
+    LOT_BANDS,
+    YEAR_BANDS,
+    BED_BATH_BANDS,
+    RADIUS_TIERS,
+    STORY_TOLERANCES,
+    SCORING_WEIGHTS,
+    CACHE_MAX_ENTRIES,
+)
 
 _CACHE: list[tuple[tuple, dict]] = []  # simple LRU list [(key, value), ...]
 
@@ -65,12 +75,14 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-def find_comps(subject_account: str,
-               max_comps: int = 25,
-               min_comps: int = 20,
-               strategy: str = "equity",
-               radius_first_strict: bool = False,
-               max_radius: float | None = None) -> Dict[str, Any]:
+def find_comps(
+    subject_account: str,
+    max_comps: int = 25,
+    min_comps: int = 20,
+    strategy: str = "equity",  # strategy kept for future diversification; presently unused.
+    radius_first_strict: bool = False,
+    max_radius: float | None = None,
+) -> Dict[str, Any]:
     if DB_PATH is None:
         import os
         from pathlib import Path
@@ -80,7 +92,7 @@ def find_comps(subject_account: str,
     conn = sqlite3.connect(DB_PATH_local)
     cur = conn.cursor()
     try:
-        # Load subject
+        # Load subject row
         subject_sql = """SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft, br.eff,
                                  pd.bedrooms, pd.bathrooms, pd.amenities, pd.property_type, pd.overall_rating, pd.quality_rating,
                                  pd.rating_explanation, pg.latitude, pg.longitude, ra.Neighborhood_Code,
@@ -115,11 +127,11 @@ def find_comps(subject_account: str,
             'has_pool': s_has_pool,
             'has_garage': s_has_garage,
             'latitude': s_lat,
-            'longitude': s_lon
+            'longitude': s_lon,
         }
         try:
             if im_sq_ft and im_sq_ft not in ('','0') and mval and mval not in ('','0'):
-                subject['ppsf'] = round(float(mval)/float(im_sq_ft),2)
+                subject['ppsf'] = round(float(mval)/float(im_sq_ft), 2)
         except Exception:
             pass
 
@@ -130,7 +142,7 @@ def find_comps(subject_account: str,
         base_beds = _float(s_beds)
         base_baths = _float(s_baths)
 
-        # Bands / tiers (copies so we can filter)
+        # Constraint bands (copy so we can filter)
         size_bands = list(SIZE_BANDS)
         lot_bands = list(LOT_BANDS)
         year_bands = list(YEAR_BANDS)
@@ -141,9 +153,9 @@ def find_comps(subject_account: str,
                 radius_tiers = [r for r in radius_tiers if r <= float(max_radius)] or radius_tiers
             except Exception:
                 pass
-        story_tolerances = list(STORY_TOLERANCES) if (s_stories is not None and str(s_stories).strip()!='') else [None]
-        pool_modes = ['match','any'] if s_has_pool in (0,1) else ['any']
-        garage_modes = ['match','any'] if s_has_garage in (0,1) else ['any']
+        story_tolerances = list(STORY_TOLERANCES) if (s_stories is not None and str(s_stories).strip() != '') else [None]
+        pool_modes = ['match', 'any'] if s_has_pool in (0, 1) else ['any']
+        garage_modes = ['match', 'any'] if s_has_garage in (0, 1) else ['any']
 
         chosen_meta: Dict[str, Any] = {
             'geo_tier': None,
@@ -158,9 +170,9 @@ def find_comps(subject_account: str,
             'attempts': 0,
             'subject_has_geo': bool(s_lat is not None and s_lon is not None),
             'used_neighborhood': False,
-            'scoring_weights': SCORING_WEIGHTS.copy()
+            'scoring_weights': SCORING_WEIGHTS.copy(),
         }
-        baseline_story = '±0' if (s_stories is not None and str(s_stories).strip()!='') else 'any'
+        baseline_story = '±0' if (s_stories is not None and str(s_stories).strip() != '') else 'any'
         baseline_meta_labels = {
             'size_band': '±5%',
             'lot_band': '±10%',
@@ -168,13 +180,12 @@ def find_comps(subject_account: str,
             'bed_bath_band': '±1',
             'story_band': baseline_story,
             'pool_rule': 'match',
-            'garage_rule': 'match'
+            'garage_rule': 'match',
         }
 
         def passes(candidate, size_band, lot_band, year_band, bed_bath_band, story_tol, pool_mode, garage_mode):
             (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
              c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = candidate
-            # Size
             if size_band is not None and base_im and c_im_sq_ft and c_im_sq_ft not in ('','0'):
                 try:
                     cim = float(c_im_sq_ft)
@@ -182,7 +193,6 @@ def find_comps(subject_account: str,
                         return False
                 except Exception:
                     return False
-            # Lot
             if lot_band is not None and base_lot and c_land_ar and c_land_ar not in ('','0'):
                 try:
                     clot = float(c_land_ar)
@@ -190,7 +200,6 @@ def find_comps(subject_account: str,
                         return False
                 except Exception:
                     return False
-            # Year
             if year_band is not None and base_year and c_eff_year and str(c_eff_year).isdigit():
                 try:
                     cy = int(c_eff_year)
@@ -198,34 +207,30 @@ def find_comps(subject_account: str,
                         return False
                 except Exception:
                     return False
-            # Beds/Baths
             if bed_bath_band is not None:
-                if base_beds is not None and c_beds not in (None,''):
+                if base_beds is not None and c_beds not in (None, ''):
                     try:
-                        if abs(float(c_beds)-base_beds) > bed_bath_band:
+                        if abs(float(c_beds) - base_beds) > bed_bath_band:
                             return False
                     except Exception:
                         return False
-                if base_baths is not None and c_baths not in (None,''):
+                if base_baths is not None and c_baths not in (None, ''):
                     try:
-                        if abs(float(c_baths)-base_baths) > bed_bath_band:
+                        if abs(float(c_baths) - base_baths) > bed_bath_band:
                             return False
                     except Exception:
                         return False
-            # Stories
-            if story_tol is not None and s_stories is not None and str(s_stories).strip()!='':
-                if c_stories in (None,''):
+            if story_tol is not None and s_stories is not None and str(s_stories).strip() != '':
+                if c_stories in (None, ''):
                     return False
                 try:
-                    if abs(int(c_stories)-int(s_stories)) > story_tol:
+                    if abs(int(c_stories) - int(s_stories)) > story_tol:
                         return False
                 except Exception:
                     return False
-            # Pool
-            if pool_mode == 'match' and s_has_pool in (0,1) and c_pool in (0,1) and int(c_pool) != int(s_has_pool):
+            if pool_mode == 'match' and s_has_pool in (0, 1) and c_pool in (0, 1) and int(c_pool) != int(s_has_pool):
                 return False
-            # Garage
-            if garage_mode == 'match' and s_has_garage in (0,1) and c_garage in (0,1) and int(c_garage) != int(s_has_garage):
+            if garage_mode == 'match' and s_has_garage in (0, 1) and c_garage in (0, 1) and int(c_garage) != int(s_has_garage):
                 return False
             return True
 
@@ -238,7 +243,7 @@ def find_comps(subject_account: str,
                             LEFT JOIN property_geo pg ON ra.acct = pg.acct"""
 
         def neighborhood_candidates():
-            if not s_nbhd or str(s_nbhd).strip()=='' :
+            if not s_nbhd or str(s_nbhd).strip() == '':
                 return []
             cur.execute(base_select + " WHERE ra.acct <> ? AND ra.Neighborhood_Code = ?", (subject_account, s_nbhd))
             return cur.fetchall()
@@ -257,7 +262,6 @@ def find_comps(subject_account: str,
             cur.execute(base_select + " WHERE ra.acct <> ? AND ra.site_addr_3 = ?", (subject_account, zipc))
             return cur.fetchall()
 
-        # Build geo sequences (tier order)
         geo_sequences: List[Tuple[str, Optional[float], Any]] = []
         if s_nbhd and str(s_nbhd).strip() != '':
             geo_sequences.append(('neighborhood', None, neighborhood_candidates))
@@ -266,182 +270,135 @@ def find_comps(subject_account: str,
                 geo_sequences.append(('radius', r, lambda rr=r: radius_candidates(rr)))
         geo_sequences.append(('zip', None, zip_candidates))
 
-        # Cache probe
         cache_key = (subject_account, max_comps, min_comps, radius_first_strict, max_radius)
         cached = _cache_get(cache_key)
         if cached:
             return cached
 
         attempts = 0
-        comps: List[Dict[str, Any]] = []
 
-        # Strict pass (all first-band constraints) if requested
-        if radius_first_strict:
-            first_size = size_bands[0]
-            first_lot = lot_bands[0]
-            first_year = year_bands[0]
-            first_bedbath = bed_bath_bands[0]
-            first_story = story_tolerances[0]
-            first_pool = pool_modes[0]
-            first_garage = garage_modes[0]
-            for geo_label, radius_val, producer in geo_sequences:
+        def build_dist_map(candidates_all):
+            if not (s_lat and s_lon):
+                return {}
+            out = {}
+            for cand in candidates_all:
+                c_lat, c_lon = cand[14], cand[15]
+                if c_lat is not None and c_lon is not None:
+                    try:
+                        out[cand[0]] = haversine(float(s_lat), float(s_lon), float(c_lat), float(c_lon))
+                    except Exception:
+                        pass
+            return out
+
+        def materialize_candidate(cand, dist_map, radius_val):
+            (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
+             c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = cand
+            if radius_val is not None and s_lat and s_lon and c_acct in dist_map and dist_map[c_acct] > radius_val:
+                return None
+            rec = {
+                'acct': c_acct,
+                'site_addr_1': c_addr1,
+                'site_addr_3': c_zipc,
+                'market_value': c_mval,
+                'land_area': c_land_ar,
+                'building_area': c_im_sq_ft,
+                'build_year': c_eff_year,
+                'bedrooms': c_beds,
+                'bathrooms': c_baths,
+                'stories': c_stories,
+                'has_pool': c_pool,
+                'has_garage': c_garage,
+                'amenities': c_amen,
+                'property_type': c_type,
+                'overall_rating': c_overall,
+                'quality_rating': c_quality,
+                'rating_explanation': c_rating_expl,
+                'distance_miles': round(dist_map.get(c_acct, 0.0), 2) if c_acct in dist_map else None,
+            }
+            try:
+                if c_im_sq_ft and c_im_sq_ft not in ('','0') and c_mval and c_mval not in ('','0'):
+                    rec['ppsf'] = round(float(c_mval)/float(c_im_sq_ft), 2)
+            except Exception:
+                pass
+            return rec
+
+        def finalize_result(comps: List[Dict[str, Any]], geo_label, radius_val,
+                             size_band, lot_band, year_band, bed_bath_band, story_tol, pool_mode, garage_mode, attempts):
+            chosen_meta.update({
+                'geo_tier': geo_label,
+                'radius_miles': radius_val,
+                'size_band': ('any' if size_band is None else f"±{int(size_band*100)}%"),
+                'lot_band': ('any' if lot_band is None else f"±{int(lot_band*100)}%"),
+                'year_band': ('any' if year_band is None else f"±{year_band}y"),
+                'bed_bath_band': ('any' if bed_bath_band is None else f"±{bed_bath_band}"),
+                'story_band': ('any' if story_tol is None else f"±{story_tol}"),
+                'pool_rule': pool_mode,
+                'garage_rule': garage_mode,
+                'attempts': attempts,
+                'used_neighborhood': geo_label == 'neighborhood',
+            })
+            for r in comps:
+                r['score'] = compute_score(r, subject, chosen_meta['scoring_weights'])
+            comps.sort(key=lambda r: (-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
+            chosen_meta['baseline'] = baseline_meta_labels
+            chosen_meta['relaxed'] = {k: (chosen_meta.get(k) != v) for k, v in baseline_meta_labels.items()}
+            chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
+            result = {'subject': subject, 'comps': comps, 'meta': chosen_meta}
+            _cache_set(cache_key, result)
+            return result
+
+        for geo_label, radius_val, producer in geo_sequences:
+            candidates_all = producer()
+            dist_map = build_dist_map(candidates_all)
+
+            def iterate_constraint_sets():
+                if radius_first_strict:
+                    yield (
+                        size_bands[0],
+                        lot_bands[0],
+                        year_bands[0],
+                        bed_bath_bands[0],
+                        story_tolerances[0],
+                        pool_modes[0],
+                        garage_modes[0],
+                        True,
+                    )
+                for combo in product(
+                    size_bands,
+                    lot_bands,
+                    year_bands,
+                    bed_bath_bands,
+                    story_tolerances,
+                    pool_modes,
+                    garage_modes,
+                ):
+                    yield (*combo, False)
+
+            seen_strict = False
+            for size_band, lot_band, year_band, bed_bath_band, story_tol, pool_mode, garage_mode, is_strict in iterate_constraint_sets():
+                if is_strict:
+                    seen_strict = True
+                elif radius_first_strict and not seen_strict:
+                    continue
                 attempts += 1
-                candidates_all = producer()
-                dist_map = {}
-                if s_lat and s_lon:
-                    for cand in candidates_all:
-                        c_lat, c_lon = cand[14], cand[15]
-                        if c_lat is not None and c_lon is not None:
-                            try:
-                                dist_map[cand[0]] = haversine(float(s_lat), float(s_lon), float(c_lat), float(c_lon))
-                            except Exception:
-                                pass
                 selected: List[Dict[str, Any]] = []
                 for cand in candidates_all:
-                    if passes(cand, first_size, first_lot, first_year, first_bedbath, first_story, first_pool, first_garage):
-                        (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
-                         c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = cand
-                        if radius_val is not None and s_lat and s_lon and c_acct in dist_map and dist_map[c_acct] > radius_val:
+                    if passes(cand, size_band, lot_band, year_band, bed_bath_band, story_tol, pool_mode, garage_mode):
+                        rec = materialize_candidate(cand, dist_map, radius_val)
+                        if rec is None:
                             continue
-                        rec = {
-                            'acct': c_acct,
-                            'site_addr_1': c_addr1,
-                            'site_addr_3': c_zipc,
-                            'market_value': c_mval,
-                            'land_area': c_land_ar,
-                            'building_area': c_im_sq_ft,
-                            'build_year': c_eff_year,
-                            'bedrooms': c_beds,
-                            'bathrooms': c_baths,
-                            'stories': c_stories,
-                            'has_pool': c_pool,
-                            'has_garage': c_garage,
-                            'amenities': c_amen,
-                            'property_type': c_type,
-                            'overall_rating': c_overall,
-                            'quality_rating': c_quality,
-                            'rating_explanation': c_rating_expl,
-                            'distance_miles': round(dist_map.get(c_acct, 0.0),2) if c_acct in dist_map else None
-                        }
-                        try:
-                            if c_im_sq_ft and c_im_sq_ft not in ('','0') and c_mval and c_mval not in ('','0'):
-                                rec['ppsf'] = round(float(c_mval)/float(c_im_sq_ft),2)
-                        except Exception:
-                            pass
                         selected.append(rec)
                         if len(selected) >= max_comps:
                             break
                 if len(selected) >= min_comps:
-                    comps = selected
-                    chosen_meta.update({
-                        'geo_tier': geo_label,
-                        'radius_miles': radius_val,
-                        'size_band': ('any' if first_size is None else f"±{int(first_size*100)}%"),
-                        'lot_band': ('any' if first_lot is None else f"±{int(first_lot*100)}%"),
-                        'year_band': ('any' if first_year is None else f"±{first_year}y"),
-                        'bed_bath_band': ('any' if first_bedbath is None else f"±{first_bedbath}"),
-                        'story_band': ('any' if first_story is None else f"±{first_story}"),
-                        'pool_rule': first_pool,
-                        'garage_rule': first_garage,
-                        'attempts': attempts,
-                        'used_neighborhood': geo_label=='neighborhood'
-                    })
-                    for r in comps:
-                        r['score'] = compute_score(r, subject, chosen_meta['scoring_weights'])
-                    comps.sort(key=lambda r: (-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
-                    chosen_meta['baseline'] = baseline_meta_labels
-                    chosen_meta['relaxed'] = {k:(chosen_meta.get(k)!=v) for k,v in baseline_meta_labels.items()}
-                    chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
-                    result = {'subject': subject, 'comps': comps, 'meta': chosen_meta}
-                    _cache_set(cache_key, result)
-                    return result
+                    return finalize_result(selected, geo_label, radius_val, size_band, lot_band, year_band,
+                                            bed_bath_band, story_tol, pool_mode, garage_mode, attempts)
 
-        # Full relaxation nested loops
-        attempts = 0
-        for geo_label, radius_val, producer in geo_sequences:
-            candidates_all = producer()
-            dist_map = {}
-            if s_lat and s_lon:
-                for cand in candidates_all:
-                    c_lat, c_lon = cand[14], cand[15]
-                    if c_lat is not None and c_lon is not None:
-                        try:
-                            dist_map[cand[0]] = haversine(float(s_lat), float(s_lon), float(c_lat), float(c_lon))
-                        except Exception:
-                            pass
-            for size_band in size_bands:
-                for lot_band in lot_bands:
-                    for year_band in year_bands:
-                        for bed_bath_band in bed_bath_bands:
-                            for story_tol in story_tolerances:
-                                for pool_mode in pool_modes:
-                                    for garage_mode in garage_modes:
-                                        attempts += 1
-                                        selected: List[Dict[str, Any]] = []
-                                        for cand in candidates_all:
-                                            if passes(cand, size_band, lot_band, year_band, bed_bath_band, story_tol, pool_mode, garage_mode):
-                                                (c_acct, c_addr1, c_zipc, c_mval, c_land_ar, c_im_sq_ft, c_eff_year, c_beds, c_baths,
-                                                 c_amen, c_type, c_overall, c_quality, c_rating_expl, c_lat, c_lon, c_stories, c_pool, c_garage) = cand
-                                                if radius_val is not None and s_lat and s_lon and c_acct in dist_map and dist_map[c_acct] > radius_val:
-                                                    continue
-                                                rec = {
-                                                    'acct': c_acct,
-                                                    'site_addr_1': c_addr1,
-                                                    'site_addr_3': c_zipc,
-                                                    'market_value': c_mval,
-                                                    'land_area': c_land_ar,
-                                                    'building_area': c_im_sq_ft,
-                                                    'build_year': c_eff_year,
-                                                    'bedrooms': c_beds,
-                                                    'bathrooms': c_baths,
-                                                    'stories': c_stories,
-                                                    'has_pool': c_pool,
-                                                    'has_garage': c_garage,
-                                                    'amenities': c_amen,
-                                                    'property_type': c_type,
-                                                    'overall_rating': c_overall,
-                                                    'quality_rating': c_quality,
-                                                    'rating_explanation': c_rating_expl,
-                                                    'distance_miles': round(dist_map.get(c_acct, 0.0),2) if c_acct in dist_map else None
-                                                }
-                                                try:
-                                                    if c_im_sq_ft and c_im_sq_ft not in ('','0') and c_mval and c_mval not in ('','0'):
-                                                        rec['ppsf'] = round(float(c_mval)/float(c_im_sq_ft),2)
-                                                except Exception:
-                                                    pass
-                                                selected.append(rec)
-                                                if len(selected) >= max_comps:
-                                                    break
-                                        if len(selected) >= min_comps:
-                                            comps = selected
-                                            chosen_meta.update({
-                                                'geo_tier': geo_label,
-                                                'radius_miles': radius_val,
-                                                'size_band': ('any' if size_band is None else f"±{int(size_band*100)}%"),
-                                                'lot_band': ('any' if lot_band is None else f"±{int(lot_band*100)}%"),
-                                                'year_band': ('any' if year_band is None else f"±{year_band}y"),
-                                                'bed_bath_band': ('any' if bed_bath_band is None else f"±{bed_bath_band}"),
-                                                'story_band': ('any' if story_tol is None else f"±{story_tol}"),
-                                                'pool_rule': pool_mode,
-                                                'garage_rule': garage_mode,
-                                                'attempts': attempts,
-                                                'used_neighborhood': geo_label=='neighborhood'
-                                            })
-                                            for r in comps:
-                                                r['score'] = compute_score(r, subject, chosen_meta['scoring_weights'])
-                                            comps.sort(key=lambda r: (-r['score'], r.get('distance_miles') if r.get('distance_miles') is not None else 9999))
-                                            chosen_meta['baseline'] = baseline_meta_labels
-                                            chosen_meta['relaxed'] = {k:(chosen_meta.get(k)!=v) for k,v in baseline_meta_labels.items()}
-                                            chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
-                                            result = {'subject': subject, 'comps': comps, 'meta': chosen_meta}
-                                            _cache_set(cache_key, result)
-                                            return result
-        # If we reach here no band combo hit min_comps; return whatever we have (possibly empty)
         chosen_meta['attempts'] = attempts
         chosen_meta['baseline'] = baseline_meta_labels
-        chosen_meta['relaxed'] = {k:(chosen_meta.get(k)!=v) for k,v in baseline_meta_labels.items()}
-        chosen_meta['pricing_stats'] = compute_pricing_stats(subject, comps)
-        result = {'subject': subject, 'comps': comps, 'meta': chosen_meta}
+        chosen_meta['relaxed'] = {k: (chosen_meta.get(k) != v) for k, v in baseline_meta_labels.items()}
+        chosen_meta['pricing_stats'] = compute_pricing_stats(subject, [])
+        result = {'subject': subject, 'comps': [], 'meta': chosen_meta}
         _cache_set(cache_key, result)
         return result
     finally:

@@ -2,11 +2,15 @@ import pandas as pd
 import os
 import csv
 import math
-import sqlite3
+import sqlite3  # kept for specific OperationalError catches (SQLite path)
+import os as _os
+from db import get_connection, wrap_cursor
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
+import time
+from contextlib import contextmanager
 
 # Import refactored comparables modules
 from taxprotest.comparables import find_comps, export_comparables  # compute_pricing_stats used via find_comps meta
@@ -19,6 +23,31 @@ EXPORTS_DIR.mkdir(exist_ok=True)
 EXTRACTED_DIR = BASE_DIR / "extracted"
 
 DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
+USING_POSTGRES = _os.getenv("TAXPROTEST_DATABASE_URL", "").startswith("postgres")
+PROFILE_LOAD = _os.getenv("TAXPROTEST_PROFILE_LOAD", "0").lower() in {"1","true","yes"}
+POSTGIS_ENABLED = bool(int(_os.getenv("TAXPROTEST_POSTGIS_FORCE", "0")))  # manual override; auto-detect later
+
+@contextmanager
+def profile(label: str):
+    if not PROFILE_LOAD:
+        yield; return
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        dur = time.perf_counter() - start
+        print(f"⏱️  {label} {dur:.2f}s")
+
+def _table_exists(cur, name: str) -> bool:
+    if USING_POSTGRES:
+        try:
+            cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = ? LIMIT 1", (name,))
+            return cur.fetchone() is not None
+        except Exception:
+            return False
+    else:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+        return cur.fetchone() is not None
 
 
 def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbcs'):
@@ -128,18 +157,70 @@ def load_data_to_sqlite():
         "real_acct": TEXT_DIR / "real_acct.txt",
         # Note: land.txt doesn't seem to be extracted, so we'll skip it for now
     }
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cursor = wrap_cursor(conn)
     try:
-        # (Rewritten implementation) Load core tables
         for table, path in files.items():
             if not path.exists():
                 print(f"Skip {table}: file not found at {path}")
                 continue
             print(f"Loading {table} from {path} ...")
-            headers = create_table_from_csv(cursor, table, path)
+            with profile(f"core {table}"):
+                headers = create_table_from_csv(cursor, table, path)
+            if USING_POSTGRES:
+                # Simple COPY fast path (tab separated). If it fails, fall back to pandas loader.
+                try:
+                    raw_cur = conn.cursor()
+                    copy_cols = ', '.join(headers)
+                    if hasattr(raw_cur, 'copy'):
+                        import csv as _csv
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            f.readline()  # skip header
+                            copy_cmd = f"COPY {table} ({copy_cols}) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
+                            try:
+                                with raw_cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
+                                    rdr = _csv.reader(f, delimiter='\t')
+                                    for row in rdr:
+                                        row2 = row[:len(headers)] + [''] * (len(headers) - len(row))
+                                        row2 = [c.strip() if isinstance(c, str) else c for c in row2]
+                                        cp.write_row(row2)
+                            except Exception as stream_e:
+                                print(f"  ⚠️  Streaming COPY failed ({stream_e}); buffering.")
+                                import io
+                                buf = io.StringIO()
+                                f.seek(0); f.readline()
+                                w = _csv.writer(buf, delimiter='\t', lineterminator='\n', quoting=_csv.QUOTE_MINIMAL)
+                                for line in f:
+                                    parts = line.rstrip('\n').split('\t')
+                                    row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
+                                    row2 = [c.strip() for c in row2]
+                                    w.writerow(row2)
+                                buf.seek(0)
+                                raw_cur.execute(copy_cmd, buf.read())
+                    else:
+                        import io, csv as _csv
+                        buf = io.StringIO()
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            f.readline()
+                            w = _csv.writer(buf, delimiter='\t', lineterminator='\n', quoting=_csv.QUOTE_MINIMAL)
+                            for line in f:
+                                parts = line.rstrip('\n').split('\t')
+                                row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
+                                row2 = [c.strip() for c in row2]
+                                w.writerow(row2)
+                        buf.seek(0)
+                        copy_cmd = f"COPY {table} ({copy_cols}) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
+                        raw_cur.execute(copy_cmd, buf.read())
+                    conn.commit()
+                    print(f"  (COPY) inserted rows into {table}")
+                    continue
+                except Exception as pg_e:
+                    try: conn.rollback()
+                    except Exception: pass
+                    print(f"  ⚠️  COPY fast path failed for {table}: {pg_e}; falling back to standard load.")
+            # Fallback / SQLite path
             load_csv_to_table(cursor, table, path, headers)
-        conn.commit(); print("All available files loaded into SQLite.")
+        conn.commit(); print("All available files loaded.")
 
         # Owners
         owners_path = TEXT_DIR / 'owners.txt'
@@ -147,21 +228,50 @@ def load_data_to_sqlite():
             print("Loading owners ...")
             cursor.execute("DROP TABLE IF EXISTS owners")
             cursor.execute("CREATE TABLE owners (acct TEXT, ln_num TEXT, name TEXT, aka TEXT, pct_own TEXT)")
-            with open(owners_path,'r',encoding='utf-8',errors='ignore') as f:
-                f.readline()
-                batch=[]
-                for line in f:
-                    parts=line.rstrip('\n').split('\t'); parts+=['']*(5-len(parts))
-                    batch.append(tuple(p.strip() for p in parts[:5]))
-                    if len(batch)>=10000:
-                        cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch); batch.clear()
-                if batch: cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch)
-            conn.commit()
+            loaded_copy = False
+            if USING_POSTGRES:
+                with profile("owners COPY"):
+                    try:
+                        raw_cur = conn.cursor()
+                        if hasattr(raw_cur,'copy'):
+                            copy_cmd = "COPY owners (acct, ln_num, name, aka, pct_own) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
+                            import csv as _csv, io
+                            with open(owners_path,'r',encoding='utf-8',errors='ignore') as f:
+                                f.readline()
+                                try:
+                                    with raw_cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
+                                        rdr=_csv.reader(f, delimiter='\t')
+                                        for row in rdr:
+                                            row2=row[:5]+['']*(5-len(row)); row2=[c.strip() for c in row2]
+                                            cp.write_row(row2)
+                                except Exception as stre:
+                                    print(f"  ⚠️ streaming owners COPY failed ({stre}); buffering.")
+                                    f.seek(0); f.readline(); buf=io.StringIO(); w=_csv.writer(buf, delimiter='\t', lineterminator='\n')
+                                    for line in f:
+                                        parts=line.rstrip('\n').split('\t'); parts+=['']*(5-len(parts))
+                                        w.writerow([p.strip() for p in parts[:5]])
+                                    buf.seek(0); raw_cur.execute(copy_cmd, buf.read())
+                            conn.commit(); loaded_copy=True; print("  (COPY) owners loaded")
+                    except Exception as pg_e:
+                        try: conn.rollback()
+                        except Exception: pass
+                        print(f"  ⚠️ owners COPY failed: {pg_e}; fallback to batch inserts")
+            if not loaded_copy:
+                with profile("owners batch"):
+                    with open(owners_path,'r',encoding='utf-8',errors='ignore') as f:
+                        f.readline(); batch=[]
+                        for line in f:
+                            parts=line.rstrip('\n').split('\t'); parts+=['']*(5-len(parts))
+                            batch.append(tuple(p.strip() for p in parts[:5]))
+                            if len(batch)>=10000:
+                                cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch); batch.clear()
+                        if batch: cursor.executemany('INSERT INTO owners VALUES (?,?,?,?,?)', batch)
+                conn.commit()
         else:
             cursor.execute("CREATE TABLE IF NOT EXISTS owners (acct TEXT, ln_num TEXT, name TEXT, aka TEXT, pct_own TEXT)")
             conn.commit()
 
-        # Descriptors helper
+        # Descriptors helper (original simple loader retained; no COPY optimization yet)
         def load_descriptor(filename, table):
             for base in (TEXT_DIR, EXTRACTED_DIR):
                 p = base/filename
@@ -182,39 +292,47 @@ def load_data_to_sqlite():
                     except Exception as e:
                         print(f"Descriptor load failed {filename}: {e}")
                     break
-        load_descriptor('desc_r_07_quality_code.txt','quality_code_desc')
-        load_descriptor('desc_r_15_land_usecode.txt','land_use_code_desc')
 
-        # Supplemental files
+        # Supplemental tables (fixtures, building_other, etc.) COPY optimization
         supplemental = {}
         for fname in ['fixtures.txt','building_other.txt','structural_elem1.txt','structural_elem2.txt','extra_features.txt']:
             for base in [TEXT_DIR, EXTRACTED_DIR]:
                 p = base/fname
                 if p.exists(): supplemental[fname]=p; break
         for fname, path in supplemental.items():
-            try:
-                hdrs = create_table_from_csv(cursor, fname.replace('.txt','').replace('-','_'), path)
-                load_csv_to_table(cursor, fname.replace('.txt','').replace('-','_'), path, hdrs, batch_size=5000)
-            except Exception as e:
-                print(f"Supplemental load failed {fname}: {e}")
-
-        # property_derived
-        cursor.execute("DROP TABLE IF EXISTS property_derived")
-        cursor.execute("""CREATE TABLE property_derived (
-            acct TEXT PRIMARY KEY,
-            bedrooms INTEGER,
-            bathrooms REAL,
-            property_type TEXT,
-            quality_code TEXT,
-            quality_rating REAL,
-            overall_rating REAL,
-            rating_explanation TEXT,
-            amenities TEXT,
-            stories INTEGER,
-            has_pool INTEGER,
-            has_garage INTEGER
-        )""")
-
+            tname=fname.replace('.txt','').replace('-','_')
+            print(f"Loading supplemental {tname} ...")
+            hdrs = create_table_from_csv(cursor, tname, path)
+            loaded_copy=False
+            if USING_POSTGRES:
+                with profile(f"supp {tname} COPY"):
+                    try:
+                        raw_cur=conn.cursor(); cols=', '.join(hdrs)
+                        if hasattr(raw_cur,'copy'):
+                            import csv as _csv, io
+                            with open(path,'r',encoding='utf-8',errors='ignore') as f:
+                                f.readline(); copy_cmd=f"COPY {tname} ({cols}) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
+                                try:
+                                    with raw_cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
+                                        rdr=_csv.reader(f, delimiter='\t')
+                                        for row in rdr:
+                                            row2=row[:len(hdrs)]+['']*(len(hdrs)-len(row)); row2=[c.strip() for c in row2]
+                                            cp.write_row(row2)
+                                    conn.commit(); loaded_copy=True; print(f"  (COPY) {tname} loaded")
+                                except Exception as se:
+                                    print(f"  ⚠️ streaming {tname} COPY failed ({se}); buffering.")
+                                    f.seek(0); f.readline(); buf=io.StringIO(); w=_csv.writer(buf, delimiter='\t', lineterminator='\n')
+                                    for line in f:
+                                        parts=line.rstrip('\n').split('\t'); parts+=['']*(len(hdrs)-len(parts))
+                                        w.writerow([p.strip() for p in parts[:len(hdrs)]])
+                                    buf.seek(0); raw_cur.execute(copy_cmd, buf.read()); conn.commit(); loaded_copy=True; print(f"  (COPY) {tname} loaded")
+                    except Exception as pg_e:
+                        try: conn.rollback()
+                        except Exception: pass
+                        print(f"  ⚠️ {tname} COPY failed: {pg_e}; fallback")
+            if not loaded_copy:
+                with profile(f"supp {tname} batch"):
+                    load_csv_to_table(cursor, tname, path, hdrs, batch_size=5000)
         # Quality ranking
         quality_rank={}
         try:
@@ -367,8 +485,8 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
         params.extend([f"%{o}%", f"%{o}%"])    
     where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     # Determine if property_geo table exists (coordinates optional)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cursor = wrap_cursor(conn)
     try:
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
         has_geo = cursor.fetchone() is not None
@@ -409,8 +527,8 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
     {where_sql}
     ORDER BY ra.site_addr_1 ASC
     LIMIT 100;"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cursor = wrap_cursor(conn)
     try:
         try:
             cursor.execute(sql, params)
@@ -468,9 +586,85 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 def find_comparables(acct: str, max_distance_miles: float = 15.0, size_tolerance: float = 0.2, land_tolerance: float = 0.2, limit: int = 50) -> List[Dict]:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cur = wrap_cursor(conn)
     try:
+        # Fast PostGIS path if geometry present
+        if USING_POSTGRES:
+            try:
+                cur.execute("SELECT 1 FROM information_schema.columns WHERE table_name='property_geo' AND column_name='geom'")
+                if cur.fetchone():
+                    # Get base property location & attributes
+                    cur.execute("""
+                        SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft,
+                               pd.bedrooms, pd.bathrooms, pg.geom, pd.overall_rating
+                        FROM real_acct ra
+                        LEFT JOIN building_res br ON ra.acct = br.acct
+                        LEFT JOIN property_derived pd ON ra.acct = pd.acct
+                        JOIN property_geo pg ON ra.acct = pg.acct
+                        WHERE ra.acct = ? AND pg.geom IS NOT NULL
+                    """, (acct,))
+                    base = cur.fetchone()
+                    if base:
+                        (acct_b, addr, zipc, mval, land_ar, im_sq_ft, bedrooms, bathrooms, geom, rating) = base
+                        # Distance in meters (PostGIS geography fallback via ST_DWithin on geometry approximated to planar for small radius)
+                        meters = max_distance_miles * 1609.34
+                        cur.execute("""
+                            SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft,
+                                   pd.bedrooms, pd.bathrooms, ST_Distance(pg.geom, pg2.geom) AS dist_m,
+                                   pd.overall_rating
+                            FROM property_geo pg2
+                            JOIN real_acct ra ON ra.acct = pg2.acct
+                            LEFT JOIN building_res br ON ra.acct = br.acct
+                            LEFT JOIN property_derived pd ON ra.acct = pd.acct
+                            JOIN property_geo pg ON pg.acct = ?
+                            WHERE pg2.geom IS NOT NULL AND pg2.acct <> ?
+                              AND ST_DWithin(pg.geom, pg2.geom, ?)
+                            LIMIT ?
+                        """, (acct, acct, meters, limit*5))
+                        candidates = cur.fetchall()
+                        results: List[Dict] = []
+                        for c in candidates:
+                            (c_acct, c_addr, c_zip, c_mval, c_land, c_im, c_bed, c_bath, dist_m, c_rating) = c
+                            # Simple filters mirrored from non-spatial path
+                            try:
+                                if im_sq_ft and c_im and im_sq_ft not in ('','0') and c_im not in ('','0') and size_tolerance:
+                                    base_im = float(im_sq_ft); cimf=float(c_im)
+                                    if not (base_im*(1-size_tolerance) <= cimf <= base_im*(1+size_tolerance)):
+                                        continue
+                            except Exception:
+                                pass
+                            try:
+                                if land_ar and c_land and land_ar not in ('','0') and c_land not in ('','0') and land_tolerance:
+                                    base_land=float(land_ar); cland=float(c_land)
+                                    if not (base_land*(1-land_tolerance) <= cland <= base_land*(1+land_tolerance)):
+                                        continue
+                            except Exception:
+                                pass
+                            ppsf=None
+                            try:
+                                if c_im and c_mval and c_im not in ('','0'):
+                                    ppsf=float(c_mval)/float(c_im)
+                            except Exception:
+                                pass
+                            results.append({
+                                'Account Number': c_acct,
+                                'Address': c_addr,
+                                'Zip Code': c_zip,
+                                'Market Value': c_mval,
+                                'Land Area': c_land,
+                                'Building Area': c_im,
+                                'Bedrooms': c_bed,
+                                'Bathrooms': c_bath,
+                                'Overall Rating': c_rating,
+                                'Distance Miles': round(dist_m/1609.34,2) if dist_m is not None else None,
+                                'Price Per Sq Ft': round(ppsf,2) if ppsf else None,
+                            })
+                        results.sort(key=lambda r: (r['Distance Miles'] or 0, r['Price Per Sq Ft'] or 0))
+                        return results[:limit]
+            except Exception:
+                # Fall back to legacy method on any PostGIS error
+                pass
         # Bail out early if geo table absent
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
         if cur.fetchone() is None:
@@ -754,8 +948,8 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "", 
     where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     # Determine if property_geo table exists for export
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cursor = wrap_cursor(conn)
     try:
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
         has_geo = cursor.fetchone() is not None
@@ -798,8 +992,8 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "", 
     file_name = (" ".join(file_name_parts) + " ").strip() + " Home Info.xlsx"
     out_path = EXPORTS_DIR / file_name
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cursor = wrap_cursor(conn)
     
     try:
         # Execute query with parameters
@@ -841,60 +1035,45 @@ if __name__ == "__main__":
     if fast_rows and fast_rows.isdigit():
         rows = int(fast_rows)
         print(f"FAST LOAD enabled: limiting first {rows} rows per table.")
-        # For fast mode, create a simple version that stops after N rows
         files = {
             "building_res": TEXT_DIR / "building_res.txt",
             "land": TEXT_DIR / "land.txt",
             "real_acct": TEXT_DIR / "real_acct.txt",
         }
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
+        conn = get_connection(str(DB_PATH))
+        cursor = wrap_cursor(conn)
         try:
             for table, path in files.items():
                 if not path.exists():
                     print(f"Skip {table}: file not found at {path}")
                     continue
                 print(f"Loading sample of {table} from {path} ...")
-                
-                # Create table and load limited rows
                 headers = create_table_from_csv(cursor, table, path)
-                
-                # Load only first N rows
                 try:
                     with open(path, 'r', encoding='mbcs', newline='') as f:
                         reader = csv.reader(f, delimiter='\t')
-                        next(reader)  # Skip header
-                        
+                        next(reader)
                         batch = []
                         for i, row in enumerate(reader):
                             if i >= rows:
                                 break
                             normalized_row = row[:len(headers)] + [''] * (len(headers) - len(row))
                             batch.append(normalized_row)
-                        
                         placeholders = ', '.join(['?' for _ in headers])
                         cursor.executemany(f'INSERT INTO {table} VALUES ({placeholders})', batch)
-                        
                 except UnicodeDecodeError:
-                    # Try utf-8 encoding
                     with open(path, 'r', encoding='utf-8', newline='') as f:
                         reader = csv.reader(f, delimiter='\t')
-                        next(reader)  # Skip header
-                        
+                        next(reader)
                         batch = []
                         for i, row in enumerate(reader):
                             if i >= rows:
                                 break
                             normalized_row = row[:len(headers)] + [''] * (len(headers) - len(row))
                             batch.append(normalized_row)
-                        
                         placeholders = ', '.join(['?' for _ in headers])
                         cursor.executemany(f'INSERT INTO {table} VALUES ({placeholders})', batch)
-                        
-            conn.commit()
-            print("Sample load complete.")
+            conn.commit(); print("Sample load complete.")
         finally:
             conn.close()
     else:

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sqlite3
+import sqlite3  # retained for type consistency when using SQLite fallback
 from typing import Dict, Any, List, Optional, Tuple
 from .stats import compute_pricing_stats
 from .scoring import compute_score
@@ -31,7 +31,13 @@ def _cache_set(key: tuple, value: dict):
     if len(_CACHE) > CACHE_MAX_ENTRIES:
         _CACHE.pop()
 
-DB_PATH = None  # Will be set by application using set_db_path
+DB_PATH = None  # Will be set by application using set_db_path (legacy)
+
+try:
+    from db import get_connection, wrap_cursor  # type: ignore
+except Exception:  # pragma: no cover
+    get_connection = None  # type: ignore
+    wrap_cursor = None  # type: ignore
 
 def set_db_path(path: str) -> None:
     global DB_PATH
@@ -71,14 +77,25 @@ def find_comps(subject_account: str,
                strategy: str = "equity",
                radius_first_strict: bool = False,
                max_radius: float | None = None) -> Dict[str, Any]:
-    if DB_PATH is None:
-        import os
-        from pathlib import Path
-        DB_PATH_local = Path(os.path.abspath(os.path.dirname(__file__))).parent / 'data' / 'database.sqlite'
-    else:
-        DB_PATH_local = DB_PATH
-    conn = sqlite3.connect(DB_PATH_local)
-    cur = conn.cursor()
+    # Prefer helper (supports Postgres) else fallback to direct sqlite path resolution
+    if get_connection:
+        if DB_PATH is None:
+            import os
+            from pathlib import Path
+            DB_PATH_local = Path(os.path.abspath(os.path.dirname(__file__))).parent / 'data' / 'database.sqlite'
+            conn = get_connection(str(DB_PATH_local))
+        else:
+            conn = get_connection(str(DB_PATH))
+        cur = wrap_cursor(conn) if wrap_cursor else conn.cursor()
+    else:  # fallback (should be rare)
+        if DB_PATH is None:
+            import os
+            from pathlib import Path
+            DB_PATH_local = Path(os.path.abspath(os.path.dirname(__file__))).parent / 'data' / 'database.sqlite'
+        else:
+            DB_PATH_local = DB_PATH
+        conn = sqlite3.connect(DB_PATH_local)
+        cur = conn.cursor()
     try:
         # Load subject
         subject_sql = """SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft, br.eff,

@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        if: matrix.db == 'postgres'
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tax
+          POSTGRES_PASSWORD: tax
+          POSTGRES_DB: taxprotest
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tax" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PYTHONUNBUFFERED: 1
+      TAXPROTEST_PROFILE_LOAD: 1
+      TAXPROTEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgresql://tax:tax@localhost:5432/taxprotest' || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install system deps (geo minimal)
+        if: matrix.db == 'postgres'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgeos-c1v5 libproj-dev gdal-bin
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install .[dev]
+
+      - name: Ruff Lint
+        run: |
+          ruff check .
+
+      - name: Type Check (mypy)
+        run: |
+          mypy src
+
+      - name: Init Postgres (extensions/indexes)
+        if: matrix.db == 'postgres'
+        run: |
+          python scripts/run_init_postgres.py
+
+      - name: Ingest core text data (COPY)
+        run: |
+          python extract_data.py
+
+      - name: Ingest geo (optional)
+        if: matrix.db == 'postgres'
+        run: |
+          python load_geo_data.py || true
+
+      - name: Run Tests
+        run: |
+          pytest -q
+
+      - name: Summary timings
+        run: |
+          python - <<'PY'
+import os,glob,time
+out=[]
+out.append(f"Data files {len(glob.glob('text_files/*.txt'))}")
+out.append(f"DB {'postgres' if os.getenv('TAXPROTEST_DATABASE_URL') else 'sqlite'}")
+timings=[l for l in open('load_profile.log','r',encoding='utf-8').read().splitlines() if l.startswith('⏱')][:50] if os.path.exists('load_profile.log') else []
+print('\n'.join(out+timings))
+with open('ci_timings.txt','w',encoding='utf-8') as f:
+    f.write('\n'.join(out+timings))
+PY
+
+      - name: Upload timing artifact
+        if: matrix.db == 'postgres'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-timings
+          path: ci_timings.txt
+
+  markdown-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint markdown
+        run: ruff check README.md

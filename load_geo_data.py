@@ -3,6 +3,14 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 
+try:  # Postgres URL detection
+    from db import get_connection, wrap_cursor  # lightweight wrapper (handles both backends)
+except Exception:  # pragma: no cover - defensive
+    get_connection = None  # type: ignore
+    wrap_cursor = None  # type: ignore
+
+USING_POSTGRES = os.getenv("TAXPROTEST_DATABASE_URL", "").startswith("postgres")
+
 # Try to import geopandas for shapefile support
 try:
     import geopandas as gpd
@@ -14,6 +22,65 @@ except ImportError:
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 EXTRACTED_DIR = BASE_DIR / "extracted"
 DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
+
+# ------------------------ Postgres helper paths ------------------------
+
+def _ensure_postgis(conn):  # pragma: no cover - simple DDL utility
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+        conn.commit()
+    except Exception:
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try: cur.close()
+        except Exception: pass
+
+def _replace_property_geo_postgres(df: pd.DataFrame):
+    """Replace property_geo table in Postgres with lon/lat + geom.
+
+    Uses COPY for speed; adds geometry column & GIST index.
+    """
+    if get_connection is None:
+        raise RuntimeError("db.get_connection not available")
+    with get_connection() as conn:  # type: ignore
+        _ensure_postgis(conn)
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS property_geo")
+        cur.execute("CREATE TABLE property_geo (acct TEXT PRIMARY KEY, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION, geom geometry(Point,4326))")
+        # COPY
+        try:
+            if hasattr(cur, 'copy'):  # psycopg3 fast path
+                copy_cmd = "COPY property_geo (acct, latitude, longitude) FROM STDIN WITH (FORMAT csv, DELIMITER ',', NULL '', HEADER false)"
+                import io, csv as _csv
+                buf = io.StringIO()
+                w = _csv.writer(buf, lineterminator='\n')
+                for row in df[['acct','latitude','longitude']].itertuples(index=False):
+                    w.writerow(row)
+                buf.seek(0)
+                cur.execute("BEGIN")
+                try:
+                    with cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
+                        for line in buf:
+                            cp.write(line)
+                except Exception:
+                    cur.execute("ROLLBACK"); raise
+                cur.execute("COMMIT")
+            else:  # fallback executemany
+                rows = list(df[['acct','latitude','longitude']].itertuples(index=False, name=None))
+                cur.executemany("INSERT INTO property_geo (acct, latitude, longitude) VALUES (%s,%s,%s)", rows)
+        except Exception as e:  # pragma: no cover - error logging path
+            try: conn.rollback()
+            except Exception: pass
+            raise RuntimeError(f"COPY/insert into property_geo failed: {e}")
+        # Populate geom
+        try:
+            cur.execute("UPDATE property_geo SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) WHERE longitude IS NOT NULL AND latitude IS NOT NULL")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_property_geo_geom ON property_geo USING GIST(geom)")
+            conn.commit()
+        finally:
+            cur.close()
 
 def install_geopandas():
     """Install geopandas and its dependencies"""
@@ -121,24 +188,22 @@ def load_geo_data():
                 
                 print(f"📊 Prepared {len(df)} valid parcel records for database")
                 
-                # Connect to the SQLite database
-                conn = sqlite3.connect(DB_PATH)
-                
-                # Write the data to the property_geo table
-                df.to_sql('property_geo', conn, if_exists='replace', index=False)
-                
-                print(f"✅ Geographic data for {len(df)} properties loaded into 'property_geo' table.")
-
-                # Create an index for faster lookups
-                print("🔍 Creating index on 'property_geo' table...")
-                cursor = conn.cursor()
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)")
-                conn.commit()
-                
-                print("✅ Index created successfully.")
-                
-                conn.close()
-                return
+                if USING_POSTGRES:
+                    _replace_property_geo_postgres(df)
+                    print(f"✅ Loaded {len(df)} geo rows into Postgres property_geo (with geom)")
+                    return
+                else:
+                    # SQLite path
+                    conn = sqlite3.connect(DB_PATH)
+                    df.to_sql('property_geo', conn, if_exists='replace', index=False)
+                    print(f"✅ Geographic data for {len(df)} properties loaded into 'property_geo' table.")
+                    print("🔍 Creating index on 'property_geo' table...")
+                    cursor = conn.cursor()
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)")
+                    conn.commit()
+                    print("✅ Index created successfully.")
+                    conn.close()
+                    return
                 
             except Exception as e:
                 print(f"❌ Error loading shapefile: {e}")
@@ -254,21 +319,18 @@ def load_geo_data():
             print(f"❌ No valid coordinate data found after cleaning")
             return
 
-        # Connect to the SQLite database
-        conn = sqlite3.connect(DB_PATH)
-        
-        # Write the data to the property_geo table
-        df.to_sql('property_geo', conn, if_exists='replace', index=False)
-        
-        print(f"✅ Geographic data for {len(df)} properties loaded into 'property_geo' table.")
-
-        # Create an index for faster lookups
-        print("🔍 Creating index on 'property_geo' table...")
-        cursor = conn.cursor()
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)")
-        conn.commit()
-        
-        print("✅ Index created successfully.")
+        if USING_POSTGRES:
+            _replace_property_geo_postgres(df)
+            print(f"✅ Loaded {len(df)} geo rows into Postgres property_geo (with geom)")
+        else:
+            conn = sqlite3.connect(DB_PATH)
+            df.to_sql('property_geo', conn, if_exists='replace', index=False)
+            print(f"✅ Geographic data for {len(df)} properties loaded into 'property_geo' table.")
+            print("🔍 Creating index on 'property_geo' table...")
+            cursor = conn.cursor()
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)")
+            conn.commit()
+            print("✅ Index created successfully.")
 
     except Exception as e:
         print(f"❌ An error occurred while loading geographic data: {e}")

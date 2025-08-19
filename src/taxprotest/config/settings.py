@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     DATABASE_PATH: Path = (
         Path(__file__).resolve().parent.parent.parent.parent / "data" / "database.sqlite"
     )
+    # Optional SQL database URL (e.g. postgresql://user:pass@host:5432/dbname)
+    DATABASE_URL: str | None = None
     CACHE_MAX_ENTRIES: int = 10_000
 
     # pydantic-settings v2 configuration

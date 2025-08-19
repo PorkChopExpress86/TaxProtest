@@ -13,7 +13,7 @@ import zipfile
 import sys
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 # Setup paths
@@ -22,6 +22,7 @@ DOWNLOADS_DIR = BASE_DIR / "downloads"
 EXTRACTED_DIR = BASE_DIR / "extracted"
 TEXT_FILES_DIR = BASE_DIR / "text_files"
 HASH_FILE = BASE_DIR / "data" / "extraction_hashes.json"
+SUMMARY_FILE = BASE_DIR / "data" / "last_extraction_report.json"
 
 # Debug toggle: disable Parcels.zip CRC integrity enforcement during development
 ENABLE_PARCELS_INTEGRITY_CHECK = False
@@ -281,7 +282,7 @@ def unzip_parcel_data(src_dir: Path, dst_dir: Path) -> bool:
     return False
 
 def main():
-    print("�📦 Harris County Tax Data Extractor")
+    print("Harris County Tax Data Extractor")
     print("=" * 50)
     
     # Define extraction rules for each ZIP file
@@ -349,33 +350,33 @@ def main():
             bad_member = _test_zip_first_bad_member(zip_path)
             if bad_member:  # Corrupt or unreadable
                 parcels_corrupt_detected = True
-                print(f"❌ Detected possible corruption in Parcels.zip (bad member: {bad_member}).")
+                print(f"[ERROR] Detected possible corruption in Parcels.zip (bad member: {bad_member}).")
                 backup_year = datetime.utcnow().year - 1
                 backup_zip = _download_backup_parcels(backup_year, DOWNLOADS_DIR)
                 if backup_zip:
-                    print(f"🔁 Using fallback backup archive {backup_zip.name}")
+                    print(f"[INFO] Using fallback backup archive {backup_zip.name}")
                     zip_path = backup_zip
                     zip_filename = backup_zip.name  # note: we intentionally do NOT hash-track fallback yet
                     backup_used = True
                 else:
                     # Last resort: attempt external fallback extraction on corrupt archive (may yield geometry only)
                     if ENABLE_PARCELS_INTEGRITY_CHECK:
-                        print("    ⚠️  Integrity enforcement is on; external fallback attempt...")
+                        print("    [WARN] Integrity enforcement is on; external fallback attempt...")
                         extract_to_tmp = EXTRACTED_DIR / "gis"
                         success = fallback_external_extract(zip_path, extract_to_tmp)
                         if success:
-                            print("    ✅ External fallback extraction succeeded (data may still be incomplete).")
+                            print("    [OK] External fallback extraction succeeded (data may still be incomplete).")
                             gis_zip_changed = True
                         else:
-                            print("    � Unable to extract Parcels.zip; skipping parcel centroid generation this run.")
+                            print("    [ERROR] Unable to extract Parcels.zip; skipping parcel centroid generation this run.")
                             continue
                     else:
-                        print("    ⚠️  Proceeding without usable attributes (hash tracking for fallback not yet enabled).")
+                        print("    [WARN] Proceeding without usable attributes (hash tracking for fallback not yet enabled).")
             else:
                 if ENABLE_PARCELS_INTEGRITY_CHECK:
-                    print("🔍 Parcels.zip integrity verified (CRC pass)")
+                    print("[INFO] Parcels.zip integrity verified (CRC pass)")
                 else:
-                    print("🔍 Parcels.zip basic CRC pass (integrity enforcement disabled)")
+                    print("[INFO] Parcels.zip basic CRC pass (integrity enforcement disabled)")
             
         # Calculate current ZIP hash
         zip_hash = calculate_file_hash(zip_path)
@@ -402,17 +403,17 @@ def main():
                         missing_required = True
                         break
             if missing_required:
-                print(f"🔄 Required extracted file(s) missing for {zip_filename}; forcing re-extract.")
+                print(f"[INFO] Required extracted file(s) missing for {zip_filename}; forcing re-extract.")
             else:
-                print(f"⏭️  Skipping {rules['description']} (already extracted, hash matches)")
+                print(f"[SKIP] {rules['description']} (already extracted, hash matches)")
                 current_hashes[zip_filename] = zip_hash
                 should_extract = False
                 files_skipped += 1
         else:
             if zip_filename in existing_hashes:
-                print(f"🔄 ZIP file changed for {rules['description']}, re-extracting...")
+                print(f"[INFO] ZIP file changed for {rules['description']}, re-extracting...")
             else:
-                print(f"📦 Extracting {rules['description']}...")
+                print(f"[EXTRACT] {rules['description']}...")
         
         if should_extract:
             # Determine extraction destination
@@ -426,7 +427,7 @@ def main():
             extracted_files = extract_zip_file(zip_path, extract_to, rules['target_files'])
 
             if extracted_files:
-                print(f"    ✅ Extracted {len(extracted_files)} files")
+                print(f"    [OK] Extracted {len(extracted_files)} files")
                 # NOTE: We intentionally skip adding hash for backup/fallback parcels archives so that
                 # future runs will re-check integrity until a fixed current-year Parcels.zip replaces it.
                 if not (backup_used and zip_filename.endswith('_Oct.zip')):
@@ -435,7 +436,7 @@ def main():
                 if zip_filename in ("GIS_Public.zip", "Parcels.zip") or (backup_used and zip_filename.endswith('_Oct.zip')):
                     gis_zip_changed = True
             else:
-                print(f"    ❌ No files extracted from {zip_filename}")
+                print(f"    [WARN] No files extracted from {zip_filename}")
         else:
             if zip_filename in ("GIS_Public.zip", "Parcels.zip"):
                 gis_zip_changed = False  # unchanged
@@ -445,12 +446,12 @@ def main():
         parcels_csv_path = EXTRACTED_DIR / "gis" / "parcels.csv"
         # Only rebuild if GIS zip changed or parcels.csv missing
         if gis_zip_changed or not parcels_csv_path.exists():
-            print("\n🧭 Generating parcels.csv (parcel centroids)...")
+            print("\n[INFO] Generating parcels.csv (parcel centroids)...")
             try:
                 import geopandas as gpd
                 from shapely.geometry import shape
             except ImportError:
-                print("  ⚠️ geopandas not installed; skipping parcel centroid generation.")
+                print("  [WARN] geopandas not installed; skipping parcel centroid generation.")
             else:
                 # Common shapefile path pattern
                 shape_dir = EXTRACTED_DIR / "gis"
@@ -463,10 +464,10 @@ def main():
                         if f.lower() == "parcels.shp":
                             shp_candidates.append(Path(root) / f)
                 if not shp_candidates:
-                    print("  ⚠️ Parcels.shp not found under extracted/gis; skipping.")
+                    print("  [WARN] Parcels.shp not found under extracted/gis; skipping.")
                 else:
                     shapefile_path = shp_candidates[0]
-                    print(f"  📄 Using shapefile: {shapefile_path}")
+                    print(f"  [INFO] Using shapefile: {shapefile_path}")
 
                     def read_parcels(path: Path):
                         """Robust shapefile read attempting multiple engines & encodings."""
@@ -490,7 +491,7 @@ def main():
                     try:
                         gdf = read_parcels(shapefile_path)
                     except Exception as e:
-                        print(f"  ❌ Failed to read parcels shapefile: {e}")
+                        print(f"  [ERROR] Failed to read parcels shapefile: {e}")
                         gdf = None
 
                     if gdf is not None:
@@ -538,18 +539,18 @@ def main():
                             df_out = df_out.drop_duplicates(subset=["acct"]).dropna(subset=["latitude", "longitude"])
                             # Persist minimal CSV
                             df_out.to_csv(parcels_csv_path, index=False)
-                            print(f"  ✅ parcels.csv generated with {len(df_out):,} rows → {parcels_csv_path}")
+                            print(f"  [OK] parcels.csv generated with {len(df_out):,} rows -> {parcels_csv_path}")
                         except Exception as e:
-                            print(f"  ❌ Error generating parcels.csv: {e}")
+                            print(f"  [ERROR] Error generating parcels.csv: {e}")
         else:
-            print("\n🧭 Parcel centroids up to date (parcels.csv exists and GIS zip unchanged).")
+            print("\n[INFO] Parcel centroids up to date (parcels.csv exists and GIS zip unchanged).")
     except Exception as e:
-        print(f"⚠️  Unexpected error during parcel centroid generation: {e}")
+        print(f"[WARN] Unexpected error during parcel centroid generation: {e}")
 
     # Save updated hashes (after potential generation)
     save_hashes(current_hashes)
     
-    print(f"\n📊 Extraction Summary:")
+    print(f"\nExtraction Summary:")
     print(f"  Archives extracted: {files_extracted}")
     print(f"  Archives skipped (up to date): {files_skipped}")
     print(f"  Total archives: {len(extraction_rules)}")
@@ -563,20 +564,34 @@ def main():
         TEXT_FILES_DIR / "owners.txt"
     ]
     
-    print(f"\n📄 Key Files Status:")
+    print(f"\nKey Files Status:")
     for file_path in key_files:
         if file_path.exists():
             size_mb = file_path.stat().st_size / (1024 * 1024)
-            print(f"  ✅ {file_path.name} ({size_mb:.1f} MB)")
+            print(f"  [OK] {file_path.name} ({size_mb:.1f} MB)")
         else:
-            print(f"  ❌ {file_path.name} (missing)")
+            print(f"  [MISSING] {file_path.name} (missing)")
     
     if files_extracted > 0:
-        print(f"\n✅ Extraction complete!")
+        print(f"\nExtraction complete!")
         print("   Next step: Run step3_import.py to import data into SQLite")
     else:
-        print(f"\n✅ All files up to date! No extraction needed.")
+        print(f"\nAll files up to date! No extraction needed.")
         print("   You can proceed with step3_import.py if database import is needed")
+
+    # Write JSON summary for orchestrator
+    summary = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "archives_extracted": files_extracted,
+        "archives_skipped": files_skipped,
+        "total_archives": len(extraction_rules),
+        "changed": files_extracted > 0,
+        "key_files_present": {kf.name: (kf.exists()) for kf in key_files}
+    }
+    try:
+        SUMMARY_FILE.write_text(json.dumps(summary, indent=2))
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     main()

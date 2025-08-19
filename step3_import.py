@@ -11,11 +11,14 @@ import argparse
 import hashlib
 import json
 import os
-import sqlite3
+import sqlite3  # kept for catching OperationalError under SQLite
+import os as _os
+from db import get_connection, wrap_cursor
 import importlib
 import extract_data
 import load_geo_data
 import pandas as pd
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +26,10 @@ from typing import Optional
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 TEXT_FILES_DIR = BASE_DIR / "text_files"
 DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
+USING_POSTGRES = (_os.getenv("TAXPROTEST_DATABASE_URL", "").startswith("postgres"))
+DEFER_INDEXES = _os.getenv("TAXPROTEST_DEFER_INDEXES", "1").lower() in {"1","true","yes"}
 HASH_FILE = BASE_DIR / "data" / "import_hashes.json"
+SUMMARY_FILE = BASE_DIR / "data" / "last_import_report.json"
 
 # Whitelist of residential state_class codes to retain (single-family, condo/townhome, multi-family)
 RESIDENTIAL_STATE_CLASSES = {
@@ -85,13 +91,61 @@ def load_parcels_csv_into_property_geo(parcels_csv: Path) -> Optional[int]:
         df = df[list(expected_cols)]
         df['acct'] = df['acct'].astype(str).str.strip().str.replace(r'[^0-9]','', regex=True).str.zfill(13)
         df = df.drop_duplicates(subset=['acct']).dropna(subset=['latitude','longitude'])
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute('DROP TABLE IF EXISTS property_geo')
-        cur.execute('CREATE TABLE property_geo (acct TEXT PRIMARY KEY, latitude REAL, longitude REAL)')
-        df.to_sql('property_geo', conn, if_exists='append', index=False)
-        cur.execute('CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)')
-        conn.commit(); conn.close()
+        conn = get_connection(str(DB_PATH))
+        # Bulk path for Postgres using COPY for significant speed-up vs INSERT/ORM/pandas
+        if USING_POSTGRES:
+            try:
+                raw_cur = conn.cursor()  # psycopg cursor
+                raw_cur.execute('DROP TABLE IF EXISTS property_geo')
+                raw_cur.execute('CREATE TABLE property_geo (acct TEXT PRIMARY KEY, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION)')
+                # COPY protocol (no header)
+                if hasattr(raw_cur, 'copy'):
+                    try:
+                        with raw_cur.copy("COPY property_geo (acct, latitude, longitude) FROM STDIN WITH (FORMAT csv)") as copy:  # type: ignore[attr-defined]
+                            for row in df.itertuples(index=False):
+                                copy.write_row([row.acct, row.latitude, row.longitude])
+                    except Exception as _cpe:
+                        print(f"⚠️  COPY streaming failed ({_cpe}); falling back to buffer method.")
+                        import io, csv as _csv
+                        buf = io.StringIO()
+                        w = _csv.writer(buf)
+                        for row in df.itertuples(index=False):
+                            w.writerow([row.acct, row.latitude, row.longitude])
+                        buf.seek(0)
+                        raw_cur.execute("COPY property_geo (acct, latitude, longitude) FROM STDIN WITH (FORMAT csv)", buf.read())
+                else:
+                    import io, csv as _csv
+                    buf = io.StringIO()
+                    w = _csv.writer(buf)
+                    for row in df.itertuples(index=False):
+                        w.writerow([row.acct, row.latitude, row.longitude])
+                    buf.seek(0)
+                    raw_cur.execute("COPY property_geo (acct, latitude, longitude) FROM STDIN WITH (FORMAT csv)", buf.read())
+                raw_cur.execute('CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)')
+                conn.commit(); raw_cur.close(); conn.close()
+            except Exception as pg_e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                try: conn.close()
+                except Exception: pass
+                print(f"⚠️  Postgres bulk load fallback due to error: {pg_e}; attempting pandas to_sql path.")
+                # Fallback to original (pandas) method via a new connection
+                conn2 = get_connection(str(DB_PATH))
+                cur = wrap_cursor(conn2)
+                cur.execute('DROP TABLE IF EXISTS property_geo')
+                cur.execute('CREATE TABLE property_geo (acct TEXT PRIMARY KEY, latitude REAL, longitude REAL)')
+                df.to_sql('property_geo', conn2, if_exists='append', index=False)
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)')
+                conn2.commit(); conn2.close()
+        else:
+            cur = wrap_cursor(conn)
+            cur.execute('DROP TABLE IF EXISTS property_geo')
+            cur.execute('CREATE TABLE property_geo (acct TEXT PRIMARY KEY, latitude REAL, longitude REAL)')
+            df.to_sql('property_geo', conn, if_exists='append', index=False)
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_property_geo_acct ON property_geo(acct)')
+            conn.commit(); conn.close()
         print(f"✅ Imported {len(df):,} parcel geo records into property_geo table.")
         return len(df)
     except Exception as e:
@@ -110,8 +164,11 @@ def ensure_property_geo(force: bool = False):
             print("⚠️  Database missing; cannot ensure property_geo yet.")
             return
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
+            if USING_POSTGRES:
+                # Postgres path: skip property_geo ensure heuristics for now (handled separately if needed)
+                return
+            conn = get_connection(str(DB_PATH))
+            cur = wrap_cursor(conn)
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
             exists = cur.fetchone() is not None
             if not exists:
@@ -130,22 +187,39 @@ def ensure_property_geo(force: bool = False):
                 pass
     if needs_rebuild:
         load_parcels_csv_into_property_geo(parcels_csv)
+        # If we rebuilt geo late, re-run spatial index creation if Postgres
+        if USING_POSTGRES and DEFER_INDEXES:
+            try:
+                conn = get_connection(str(DB_PATH))
+                create_deferred_indexes(conn)
+                conn.close()
+            except Exception:
+                pass
 
 def verify_database_integrity():
     """Run basic integrity checks and ensure core indexes exist."""
-    if not DB_PATH.exists():
+    if not DB_PATH.exists() and not USING_POSTGRES:
         print("⚠️  No database file to verify.")
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    conn = get_connection(str(DB_PATH))
+    cur = wrap_cursor(conn)
     try:
         print("🔎 Verifying database integrity...")
-        cur.execute("PRAGMA integrity_check")
-        result = cur.fetchone()
-        if result and result[0] == 'ok':
-            print("   ✅ integrity_check OK")
+        if not USING_POSTGRES:
+            cur.execute("PRAGMA integrity_check")
+            result = cur.fetchone()
+            if result and result[0] == 'ok':
+                print("   ✅ integrity_check OK")
+            else:
+                print(f"   ❌ integrity_check failed: {result}")
         else:
-            print(f"   ❌ integrity_check failed: {result}")
+            # Minimal Postgres check
+            try:
+                cur.execute("SELECT 1")
+                _ = cur.fetchone()
+                print("   ✅ basic connectivity OK")
+            except Exception as e:  # pragma: no cover
+                print(f"   ❌ connectivity check failed: {e}")
         # Ensure critical indexes (idempotent)
         index_sqls = [
             "CREATE INDEX IF NOT EXISTS idx_real_acct_acct ON real_acct(acct)",
@@ -381,8 +455,8 @@ def import_data_to_sqlite():
     if land_path.exists():
         try:
             print("Loading land from", land_path, "...")
-            conn_tmp = sqlite3.connect(DB_PATH)
-            cur_tmp = conn_tmp.cursor()
+            conn_tmp = get_connection(str(DB_PATH))
+            cur_tmp = wrap_cursor(conn_tmp)
             headers = create_table_from_csv(cur_tmp, 'land', land_path)
             load_csv_to_table(cur_tmp, 'land', land_path, headers)
             try:
@@ -400,6 +474,8 @@ def import_data_to_sqlite():
     # Filter to residential-only scope before index creation
     def prune_to_residential(conn):
         try:
+            if USING_POSTGRES:
+                return
             cur = conn.cursor()
             # Ensure state_class column exists
             cur.execute("PRAGMA table_info(real_acct)")
@@ -451,8 +527,8 @@ def import_data_to_sqlite():
 
     # Create indexes & normalize acct values
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_connection(str(DB_PATH))
+        cursor = wrap_cursor(conn)
         prune_to_residential(conn)
         print("🔍 Creating database indexes...")
         indexes = [
@@ -467,8 +543,8 @@ def import_data_to_sqlite():
         conn.commit(); conn.close()
         # Normalize acct whitespace
         try:
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
+            conn = get_connection(str(DB_PATH))
+            cur = wrap_cursor(conn)
             for t in ['real_acct','building_res','fixtures','structural_elem1','structural_elem2','extra_features','building_other','owners','property_derived','property_geo']:
                 try:
                     cur.execute(f"PRAGMA table_info({t})")
@@ -501,23 +577,38 @@ def ensure_ppsf_metric():
     """Ensure persistent price-per-square-foot metric in property_derived.
 
     Adds ppsf column if missing; populates from tot_mkt_val / im_sq_ft (numeric, >0)."""
-    if not DB_PATH.exists():
+    if not DB_PATH.exists() and not USING_POSTGRES:
         return
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_derived'")
-        if cur.fetchone() is None:
-            return
-        cur.execute("PRAGMA table_info(property_derived)")
-        cols = [c[1].lower() for c in cur.fetchall()]
-        if 'ppsf' not in cols:
-            try:
-                cur.execute("ALTER TABLE property_derived ADD COLUMN ppsf REAL")
-            except Exception as e:
-                print(f"⚠️  Could not add ppsf column: {e}")
-                conn.commit()
+        conn = get_connection(str(DB_PATH))
+        cur = wrap_cursor(conn)
+        if USING_POSTGRES:
+            cur.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name='property_derived'")
+            if cur.fetchone()[0] == 0:
                 return
+        else:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_derived'")
+            if cur.fetchone() is None:
+                return
+        if USING_POSTGRES:
+            # Postgres: use information_schema to detect column; add if missing
+            cur.execute("""SELECT column_name FROM information_schema.columns WHERE table_name='property_derived'""")
+            cols = [r[0].lower() for r in cur.fetchall()]
+            if 'ppsf' not in cols:
+                try:
+                    cur.execute("ALTER TABLE property_derived ADD COLUMN IF NOT EXISTS ppsf DOUBLE PRECISION")
+                except Exception as e:
+                    print(f"⚠️  Could not add ppsf column (pg): {e}")
+                    conn.commit(); return
+        else:
+            cur.execute("PRAGMA table_info(property_derived)")
+            cols = [c[1].lower() for c in cur.fetchall()]
+            if 'ppsf' not in cols:
+                try:
+                    cur.execute("ALTER TABLE property_derived ADD COLUMN ppsf REAL")
+                except Exception as e:
+                    print(f"⚠️  Could not add ppsf column: {e}")
+                    conn.commit(); return
         # Refresh values (safe overwrite)
         cur.execute("""
             UPDATE property_derived
@@ -550,7 +641,7 @@ def main():
 
     print("🗃️  Harris County Tax Data SQLite Importer")
     print("=" * 50)
-    if args.drop_db and DB_PATH.exists():
+    if args.drop_db and DB_PATH.exists() and not USING_POSTGRES:
         try:
             DB_PATH.unlink()
             print(f"🗑️  Deleted existing database: {DB_PATH}")
@@ -599,12 +690,12 @@ def main():
         print("⚠️  Force flag set: ignoring hash comparison; full re-import will run.")
     else:
         if "combined_hash" in existing_hashes and existing_hashes["combined_hash"] == current_combined_hash:
-            if DB_PATH.exists():
+            if DB_PATH.exists() or USING_POSTGRES:
                 print("⏭️  Database up to date (file hashes match)")
                 print(f"   Database: {DB_PATH}")
                 # Show database stats
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
+                conn = get_connection(str(DB_PATH))
+                cursor = wrap_cursor(conn)
                 try:
                     cursor.execute("SELECT COUNT(*) FROM real_acct")
                     acct_count = cursor.fetchone()[0]
@@ -617,11 +708,12 @@ def main():
                     print("   Database exists but seems incomplete, will re-import")
                 finally:
                     conn.close()
-            else:
+            else:  # SQLite path only
                 print("🔄 Database file missing, will import...")
         else:
             print("🔄 Data files changed, importing...")
     
+    import_changed = False
     if should_import:
         print(f"\n📁 Importing from files: {', '.join(existing_files)}")
         
@@ -638,8 +730,8 @@ def main():
                 print(f"⚠️  Could not save hash file: {e}")
             
             # Show final stats
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
+            conn = get_connection(str(DB_PATH))
+            cursor = wrap_cursor(conn)
             try:
                 cursor.execute("SELECT COUNT(*) FROM real_acct")
                 acct_count = cursor.fetchone()[0]
@@ -650,6 +742,7 @@ def main():
                 print(f"  Properties with amenities: {amenities_count:,}")
                 print(f"  Database: {DB_PATH}")
                 print(f"\n✅ Ready to run Flask app! Use: python app.py")
+                import_changed = True
             finally:
                 conn.close()
         else:
@@ -659,6 +752,38 @@ def main():
         ensure_property_geo(force=False)
         verify_database_integrity()
         print(f"\n✅ Database ready! Use: python app.py")
+
+    # Emit JSON summary for orchestrator
+    try:
+        db_stats = {}
+        if DB_PATH.exists() or USING_POSTGRES:
+            try:
+                conn = get_connection(str(DB_PATH))
+                cur = wrap_cursor(conn)
+                try:
+                    cur.execute("SELECT COUNT(*) FROM real_acct")
+                    db_stats['real_acct'] = cur.fetchone()[0]
+                except Exception:
+                    pass
+                try:
+                    cur.execute("SELECT COUNT(*) FROM property_derived")
+                    db_stats['property_derived'] = cur.fetchone()[0]
+                except Exception:
+                    pass
+            finally:
+                try: cur.close(); conn.close()
+                except Exception: pass
+        summary = {
+            'timestamp_utc': datetime.utcnow().isoformat() + 'Z',
+            'should_import': should_import,
+            'import_changed': import_changed,
+            'database_exists': (DB_PATH.exists() or USING_POSTGRES),
+            'db_stats': db_stats,
+        }
+        with open(SUMMARY_FILE, 'w') as f:
+            json.dump(summary, f, indent=2)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     main()

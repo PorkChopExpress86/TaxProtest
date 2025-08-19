@@ -22,6 +22,8 @@ BASE_DIR = pathlib.Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 REPORT_PATH = DATA_DIR / 'last_refresh_report.json'
 STEP1_REPORT = DATA_DIR / 'last_download_report.json'
+STEP2_REPORT = DATA_DIR / 'last_extraction_report.json'
+STEP3_REPORT = DATA_DIR / 'last_import_report.json'
 
 
 def run_step(cmd: list[str]) -> tuple[int,str]:
@@ -51,16 +53,16 @@ def run_refresh():
             pass
 
     # Step 2 (only if downloads changed)
-    extraction_output = ''
     if overall['download_changed']:
         print('\n== Step 2: Extract ==')
         rc2, out2 = run_step([sys.executable, 'step2_extract.py'])
         print(out2)
-        extraction_output = out2
-        # Detect if any archives extracted via summary line
-        m = re.search(r'Archives extracted:\s*(\d+)', out2)
-        if m and int(m.group(1)) > 0:
-            overall['extraction_changed'] = True
+        if STEP2_REPORT.exists():
+            try:
+                e = json.loads(STEP2_REPORT.read_text())
+                overall['extraction_changed'] = bool(e.get('changed'))
+            except Exception:
+                pass
     else:
         print('Skip extraction (no new downloads)')
 
@@ -72,9 +74,12 @@ def run_refresh():
         print('\n== Step 3: Import ==')
         rc3, out3 = run_step([sys.executable, 'step3_import.py'])
         print(out3)
-        # Detect if an import actually occurred vs. skip
-        if 'Import Summary:' in out3 or 'All data imported successfully' in out3 or 'Data files changed, importing' in out3:
-            overall['import_changed'] = True
+        if STEP3_REPORT.exists():
+            try:
+                i = json.loads(STEP3_REPORT.read_text())
+                overall['import_changed'] = bool(i.get('import_changed'))
+            except Exception:
+                pass
     else:
         print('Skip import (no extraction changes)')
 

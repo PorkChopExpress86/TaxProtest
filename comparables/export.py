@@ -1,3 +1,6 @@
+"""Deprecated legacy module; use 'taxprotest.comparables.export'.
+Retained temporarily for backward import compatibility."""
+from __future__ import annotations
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, List

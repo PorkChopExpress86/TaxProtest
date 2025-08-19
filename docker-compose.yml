@@ -10,6 +10,9 @@ services:
       TAXPROTEST_DEBUG: "0"
       TAXPROTEST_HOST: "0.0.0.0"
       TAXPROTEST_PORT: "8000"
+      TAXPROTEST_DATABASE_URL: "postgresql://tax:tax@postgres:5432/taxprotest"
+    depends_on:
+      - postgres
     ports:
       - "5001:8000"
     volumes:
@@ -17,11 +20,51 @@ services:
       - exports_volume:/app/Exports
     restart: unless-stopped
 
+  # Development container with live source mount & test tooling
+  taxprotest-dev:
+    image: taxprotest:latest
+    build: .
+    container_name: taxprotest-dev
+    command: ["python","-m","flask","run","--host=0.0.0.0","--port=8001"]
+    environment:
+      FLASK_APP: taxprotest.app
+      FLASK_ENV: development
+      TAXPROTEST_SECRET_KEY: "dev-change-me"
+      TAXPROTEST_DEBUG: "1"
+      TAXPROTEST_HOST: "0.0.0.0"
+      TAXPROTEST_PORT: "8001"
+      TAXPROTEST_DATABASE_URL: "postgresql://tax:tax@postgres:5432/taxprotest"
+    depends_on:
+      - postgres
+    ports:
+      - "5002:8001"
+    volumes:
+      - ./:/app
+      - data_volume:/app/data
+      - exports_volume:/app/Exports
+    restart: unless-stopped
+
+  # One-shot ingestion runner (text + geo) use: docker compose run --rm ingest
+  ingest:
+    image: taxprotest:latest
+    build: .
+    environment:
+      TAXPROTEST_DATABASE_URL: "postgresql://tax:tax@postgres:5432/taxprotest"
+      TAXPROTEST_PROFILE_LOAD: "1"
+    depends_on:
+      - postgres
+    volumes:
+      - ./:/app
+      - data_volume:/app/data
+      - exports_volume:/app/Exports
+    entrypoint: ["python","scripts/ingest_postgres.py"]
+
   refresh:
     image: taxprotest:latest
     build: .
     depends_on:
       - taxprotest
+      - postgres
     # Runs the smart orchestrator then exits (use: docker compose run --rm refresh)
     command: ["python", "refresh.py"]
     volumes:
@@ -36,7 +79,25 @@ services:
     #   retries: 3
     #   start_period: 20s
 
-# Add a named volume section if you prefer docker-managed volumes instead of bind mounts:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taxprotest-postgres
+    environment:
+      POSTGRES_USER: tax
+      POSTGRES_PASSWORD: tax
+      POSTGRES_DB: taxprotest
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"  # host:container
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tax"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   data_volume:
   exports_volume:
+  pg_data:

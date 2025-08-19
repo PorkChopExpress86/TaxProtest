@@ -27,12 +27,20 @@ line-length = 88
 select = ["E","F","I","UP","B","C4","SIM","PL"]
 fix = true
 
+[tool.ruff.lint]
+extend-select = ["MD"]
+ignore = ["MD034"]  # allow bare links where intentional
+
+[tool.ruff.lint.per-file-ignores]
+"README.md" = ["MD034"]
+
 [project.optional-dependencies]
 dev = [
   "pytest",
   "mypy",
   "ruff",
   "black",
+  "pre-commit",
   "types-requests",
   "pandas",
   "openpyxl",

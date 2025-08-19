@@ -20,18 +20,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System packages (add spatial libs here if later enabling geo features)
+# System packages + optional spatial libs (proj, geos, gdal minimal)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        libgeos-c1v5 \
+        libproj-dev \
+        gdal-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project metadata only first (maximize layer cache for deps)
 COPY pyproject.toml README.md ./
 COPY requirements.txt ./
 
-# Install third-party dependencies
+# Install third-party dependencies (core + optional geo if present)
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements.txt && \
+    if [ -f requirements-geo.txt ]; then pip install -r requirements-geo.txt; fi
 
 # Copy application source and assets
 COPY src ./src
