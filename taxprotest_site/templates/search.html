@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% load highlight %}
+{% block content %}
+<div class="max-w-7xl mx-auto">
+  <div class="bg-white rounded-xl shadow-lg overflow-hidden mb-8">
+    <div class="bg-gradient-to-r from-primary-600 to-accent-600 text-white px-6 py-4">
+      <h2 class="text-xl font-semibold flex items-center">
+        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+        Search Properties
+      </h2>
+    </div>
+    <div class="p-6">
+      <form method="get" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6" id="search-form">
+        <div class="space-y-2">
+          <label for="{{ form.acct.id_for_label }}" class="block text-sm font-semibold text-gray-700">Tax Account Number</label>
+          {{ form.acct }}
+        </div>
+        <div class="space-y-2">
+          <label for="{{ form.owner.id_for_label }}" class="block text-sm font-semibold text-gray-700">Owner Name</label>
+          {{ form.owner }}
+        </div>
+        <div class="space-y-2">
+          <label for="{{ form.street.id_for_label }}" class="block text-sm font-semibold text-gray-700">Street Name</label>
+          {{ form.street }}
+        </div>
+        <div class="space-y-2">
+          <label for="{{ form.zip_code.id_for_label }}" class="block text-sm font-semibold text-gray-700">Zip Code</label>
+          {{ form.zip_code }}
+        </div>
+        <div class="flex items-center space-x-2">
+          {{ form.exact_match }}
+          <label for="{{ form.exact_match.id_for_label }}" class="text-sm font-medium text-gray-700">Exact street name match</label>
+        </div>
+        <div class="space-y-2">
+          <label for="{{ form.page_size.id_for_label }}" class="block text-sm font-semibold text-gray-700">Page Size</label>
+          {{ form.page_size }}
+        </div>
+        <div class="col-span-full">
+          <button type="submit" class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-primary-600 to-accent-600 text-white font-semibold rounded-lg hover:from-primary-700 hover:to-accent-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transform hover:scale-105 transition-all duration-200 shadow-lg">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+            Search Properties
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if results %}
+  <div class="max-w-7xl mx-auto">
+    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+      <div class="bg-gradient-to-r from-secondary-600 to-secondary-700 text-white px-6 py-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold flex items-center">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            Results ({{ total }})
+          </h3>
+          <div class="flex items-center gap-3">
+            {% if results and results|length > 0 %}
+              <a class="inline-flex items-center px-4 py-2 bg-success-600 text-white font-medium rounded-lg hover:bg-success-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-success-500 transition-all duration-200 transform hover:scale-105" href="{% url 'export_search_results' fmt='csv' %}?{% for k,v in request.GET.items %}{{ k }}={{ v|urlencode }}&{% endfor %}" title="Download search results as CSV">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                CSV
+              </a>
+              <a class="inline-flex items-center px-4 py-2 bg-accent-600 text-white font-medium rounded-lg hover:bg-accent-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-500 transition-all duration-200 transform hover:scale-105" href="{% url 'export_search_results' fmt='xlsx' %}?{% for k,v in request.GET.items %}{{ k }}={{ v|urlencode }}&{% endfor %}" title="Download search results as Excel">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+                Excel
+              </a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="p-6">
+        <div class="mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div class="text-sm text-gray-600">Showing results</div>
+          <div class="flex items-center gap-3">
+            <label for="client-filter" class="text-sm font-medium text-gray-700">Filter current page:</label>
+            <input id="client-filter" type="text" class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors minw-200" placeholder="Type to filter...">
+            <span class="px-2 py-1 bg-primary-100 text-primary-800 text-xs font-medium rounded-full hidden" id="filter-count"></span>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse bg-white rounded-lg overflow-hidden shadow-sm" id="results-table">
+            <thead class="bg-gray-50">
+              <tr class="border-b border-gray-200">
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Acct</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Owner</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Address</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Year</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Beds</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Baths</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Sty</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">PPSF</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Value</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Amenities</th>
+                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Comps</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+            {% for r in results %}
+              <tr class="hover:bg-gray-50 transition-colors duration-150">
+                <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ r.acct|default:r.acct }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.owner|default:''|highlight:request.GET.owner }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.situs_address|default:''|highlight:request.GET.street }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.build_year|default:'' }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.bedrooms|default:'' }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.bathrooms|default:'' }}</td>
+                <td class="px-4 py-3 text-sm text-gray-700">{{ r.stories|default:'' }}</td>
+                <td class="px-4 py-3 text-sm font-semibold text-green-600">{% if r.ppsf %}${{ r.ppsf|floatformat:2 }}{% else %}-{% endif %}</td>
+                <td class="px-4 py-3 text-sm font-semibold text-blue-600">{% if r.market_value %}${{ r.market_value|floatformat:0 }}{% else %}-{% endif %}</td>
+                <td class="px-4 py-3 text-sm text-gray-700 truncate-180">{{ r.amenities|default:'' }}</td>
+                <td class="px-4 py-3 text-sm">
+                  <a class="inline-flex items-center px-3 py-2 bg-primary-600 text-white text-xs font-medium rounded-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-all duration-200 show-loading" href="{% url 'comparables:comparables' r.acct %}">
+                    <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                    </svg>
+                    View
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="mt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div class="order-2 sm:order-1">
+            {% include 'pagination.html' %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% block extra_scripts %}
+<script>
+document.getElementById('page_size')?.addEventListener('change', function(){
+  const form = document.getElementById('search-form'); if(form) form.requestSubmit();
+});
+const filterInput = document.getElementById('client-filter'); 
+const table = document.getElementById('results-table'); 
+const counter = document.getElementById('filter-count');
+
+if(filterInput && table){
+  filterInput.addEventListener('input', function(){
+    const q = this.value.trim().toLowerCase(); 
+    let visible=0; 
+    let totalRows=0;
+    
+    table.querySelectorAll('tbody tr').forEach(tr=>{
+      totalRows++; 
+      if(!q){ 
+        tr.style.display=''; 
+        visible++; 
+        return;
+      } 
+      const text = tr.textContent.toLowerCase(); 
+      if(text.indexOf(q)!==-1){ 
+        tr.style.display=''; 
+        visible++; 
+      } else { 
+        tr.style.display='none'; 
+      }
+    });
+    
+    if(q){ 
+      counter.classList.remove('hidden'); 
+      counter.textContent = visible+' / '+totalRows; 
+    } else { 
+      counter.classList.add('hidden'); 
+    }
+  });
+}
+</script>
+{% endblock %}
+
+{% endblock %}

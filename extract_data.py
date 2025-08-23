@@ -13,7 +13,8 @@ import time
 from contextlib import contextmanager
 
 # Import refactored comparables modules
-from taxprotest.comparables import find_comps, export_comparables  # compute_pricing_stats used via find_comps meta
+from taxprotest_site.comparables.services import find_comps
+# Note: export_comparables removed to avoid circular import with views.py
 
 BASE_DIR = Path(os.path.abspath(os.path.dirname(__file__)))
 TEXT_DIR = BASE_DIR / "text_files"
@@ -26,6 +27,44 @@ DB_PATH = BASE_DIR / 'data' / 'database.sqlite'
 USING_POSTGRES = _os.getenv("TAXPROTEST_DATABASE_URL", "").startswith("postgres")
 PROFILE_LOAD = _os.getenv("TAXPROTEST_PROFILE_LOAD", "0").lower() in {"1","true","yes"}
 POSTGIS_ENABLED = bool(int(_os.getenv("TAXPROTEST_POSTGIS_FORCE", "0")))  # manual override; auto-detect later
+
+# Cross-platform default file encoding and simple detector
+DEFAULT_ENCODING = 'mbcs' if os.name == 'nt' else 'utf-8'
+
+def detect_text_encoding(path: Path, default: str = DEFAULT_ENCODING) -> str:
+    """Best-effort tiny detector for common encodings in exported text files.
+
+    Prefers BOM-aware UTFs; falls back to utf-8, then cp1252. Keeps default on success.
+    """
+    try:
+        with open(path, 'rb') as bf:
+            head = bf.read(4)
+        # UTF BOMs
+        if head.startswith(b"\xff\xfe") or head.startswith(b"\xfe\xff"):
+            return 'utf-16'
+        if head.startswith(b"\xef\xbb\xbf"):
+            return 'utf-8-sig'
+        # Try utf-8 fast path
+        try:
+            with open(path, 'r', encoding='utf-8') as tf:
+                for _ in range(3):
+                    if not tf.readline():
+                        break
+            return 'utf-8'
+        except UnicodeDecodeError:
+            pass
+        # Try Windows-1252 (common on Windows exports)
+        try:
+            with open(path, 'r', encoding='cp1252') as tf:
+                for _ in range(3):
+                    if not tf.readline():
+                        break
+            return 'cp1252'
+        except UnicodeDecodeError:
+            pass
+    except Exception:
+        pass
+    return default
 
 @contextmanager
 def profile(label: str):
@@ -41,7 +80,7 @@ def profile(label: str):
 def _table_exists(cur, name: str) -> bool:
     if USING_POSTGRES:
         try:
-            cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = ? LIMIT 1", (name,))
+            cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = ? LIMIT 1", (name.lower(),))
             return cur.fetchone() is not None
         except Exception:
             return False
@@ -50,40 +89,66 @@ def _table_exists(cur, name: str) -> bool:
         return cur.fetchone() is not None
 
 
-def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding='mbcs'):
+def create_table_from_csv(cursor, table_name: str, csv_path: Path, encoding: str = DEFAULT_ENCODING):
     """Create table schema by reading first few rows of CSV"""
     try:
-        with open(csv_path, 'r', encoding=encoding, newline='') as f:
+        # Decide on encoding for this file
+        enc = detect_text_encoding(csv_path, encoding)
+        with open(csv_path, 'r', encoding=enc, errors='ignore', newline='') as f:
             reader = csv.reader(f, delimiter='\t')
             headers = next(reader)
-            
-        # Clean column names (remove special chars, spaces)
+
+        # Clean column names -> safe, lowercase SQL identifiers (unquoted)
         clean_headers = []
+        seen = set()
         for h in headers:
-            clean_h = ''.join(c if c.isalnum() else '_' for c in h)
-            clean_headers.append(clean_h)
-        
-        # Create table with TEXT columns (SQLite is flexible)
-        columns = ', '.join(f'"{h}" TEXT' for h in clean_headers)
+            # replace non-alnum with underscore and lowercase
+            base = ''.join(c if c.isalnum() else '_' for c in h)
+            base = base.strip('_').lower() or 'col'
+            if base and not base[0].isalpha():
+                base = f"c_{base}"
+            name = base
+            i = 1
+            while name in seen:
+                name = f"{base}_{i}"
+                i += 1
+            seen.add(name)
+            clean_headers.append(name)
+
+        # Create table with TEXT columns (SQLite flexible, Postgres text OK)
+        columns = ', '.join(f'{h} TEXT' for h in clean_headers)
         cursor.execute(f'DROP TABLE IF EXISTS {table_name}')
         cursor.execute(f'CREATE TABLE {table_name} ({columns})')
-        
+
         return clean_headers
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, LookupError):
         if encoding != 'utf-8':
             return create_table_from_csv(cursor, table_name, csv_path, encoding='utf-8')
         raise
 
 
-def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, encoding='mbcs', batch_size=10000):
+def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, encoding: str = DEFAULT_ENCODING, batch_size=10000):
     """Load CSV data into SQLite table in batches using pandas for robustness."""
     try:
+        # Resolve encoding cross-platform
+        enc = detect_text_encoding(csv_path, encoding)
         # Use pandas to read the tab-separated file, treat all columns as strings to avoid type errors
-        df = pd.read_csv(csv_path, sep='\t', header=0, names=headers, encoding=encoding, on_bad_lines='warn', low_memory=False, dtype=str)
-        
+        try:
+            df = pd.read_csv(csv_path, sep='\t', header=0, names=headers, encoding=enc, on_bad_lines='warn', low_memory=False, dtype=str)
+        except UnicodeDecodeError:
+            for alt in ('cp1252','utf-8-sig','latin-1'):
+                try:
+                    df = pd.read_csv(csv_path, sep='\t', header=0, names=headers, encoding=alt, on_bad_lines='warn', low_memory=False, dtype=str)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                # Last resort: ignore errors to keep loading
+                df = pd.read_csv(csv_path, sep='\t', header=0, names=headers, encoding='utf-8', on_bad_lines='skip', low_memory=False, dtype=str, engine='python', quoting=3)
+
         # Clean up column names if they were not provided
         df.columns = [(''.join(c if c.isalnum() else '_' for c in h)) for h in df.columns]
-        
+
         # Trim whitespace from all string columns
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].str.strip()
@@ -92,7 +157,7 @@ def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, en
         df.to_sql(table_name, cursor.connection, if_exists='replace', index=False, chunksize=batch_size)
         print(f"  inserted {len(df)} rows into {table_name}")
 
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, LookupError):
         if encoding != 'utf-8':
             load_csv_to_table(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
         else:
@@ -102,7 +167,7 @@ def load_csv_to_table(cursor, table_name: str, csv_path: Path, headers: list, en
         # Fallback to original implementation if pandas fails
         _load_csv_to_table_original(cursor, table_name, csv_path, headers, encoding, batch_size)
 
-def _load_csv_to_table_original(cursor, table_name: str, csv_path: Path, headers: list, encoding='mbcs', batch_size=10000):
+def _load_csv_to_table_original(cursor, table_name: str, csv_path: Path, headers: list, encoding: str = DEFAULT_ENCODING, batch_size=10000):
     """Original implementation for loading CSV data into SQLite table in batches"""
     # Increase CSV field size limit
     try:
@@ -111,13 +176,14 @@ def _load_csv_to_table_original(cursor, table_name: str, csv_path: Path, headers
         pass
     
     try:
-        with open(csv_path, 'r', encoding=encoding, newline='') as f:
-            reader = csv.reader(f, delimiter='\t')
-            next(reader)  # Skip header row
+        enc = detect_text_encoding(csv_path, encoding)
+        with open(csv_path, 'r', encoding=enc, errors='ignore', newline='') as f:
+            next(f)  # Skip header row
             
             batch = []
-            for row_num, row in enumerate(reader, 1):
-                normalized_row = row[:len(headers)] + [''] * (len(headers) - len(row))
+            for row_num, line in enumerate(f, 1):
+                parts = line.rstrip('\n').split('\t')
+                normalized_row = parts[:len(headers)] + [''] * (len(headers) - len(parts))
                 acct_indices = [i for i, h in enumerate(headers) if h.lower() == 'acct']
                 if acct_indices:
                     ai = acct_indices[0]
@@ -144,7 +210,7 @@ def _load_csv_to_table_original(cursor, table_name: str, csv_path: Path, headers
                     except Exception:
                         pass
                 
-    except UnicodeDecodeError:
+    except (UnicodeDecodeError, LookupError):
         if encoding != 'utf-8':
             _load_csv_to_table_original(cursor, table_name, csv_path, headers, encoding='utf-8', batch_size=batch_size)
         else:
@@ -174,43 +240,33 @@ def load_data_to_sqlite():
                     copy_cols = ', '.join(headers)
                     if hasattr(raw_cur, 'copy'):
                         import csv as _csv
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        try:
+                            _csv.field_size_limit(10_000_000)
+                        except Exception:
+                            pass
+                        enc = detect_text_encoding(path)
+                        with open(path, 'r', encoding=enc, errors='ignore') as f:
                             f.readline()  # skip header
                             copy_cmd = f"COPY {table} ({copy_cols}) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
                             try:
                                 with raw_cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
-                                    rdr = _csv.reader(f, delimiter='\t')
-                                    for row in rdr:
-                                        row2 = row[:len(headers)] + [''] * (len(headers) - len(row))
+                                    for line in f:
+                                        parts = line.rstrip('\n').split('\t')
+                                        row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
                                         row2 = [c.strip() if isinstance(c, str) else c for c in row2]
                                         cp.write_row(row2)
                             except Exception as stream_e:
-                                print(f"  ⚠️  Streaming COPY failed ({stream_e}); buffering.")
-                                import io
-                                buf = io.StringIO()
+                                print(f"  ⚠️  Streaming COPY failed ({stream_e}); retrying with larger field size and strict row writer.")
                                 f.seek(0); f.readline()
-                                w = _csv.writer(buf, delimiter='\t', lineterminator='\n', quoting=_csv.QUOTE_MINIMAL)
-                                for line in f:
-                                    parts = line.rstrip('\n').split('\t')
-                                    row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
-                                    row2 = [c.strip() for c in row2]
-                                    w.writerow(row2)
-                                buf.seek(0)
-                                raw_cur.execute(copy_cmd, buf.read())
+                                with raw_cur.copy(copy_cmd) as cp:
+                                    for line in f:
+                                        parts = line.rstrip('\n').split('\t')
+                                        row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
+                                        row2 = [c.strip() if isinstance(c, str) else c for c in row2]
+                                        cp.write_row(row2)
                     else:
-                        import io, csv as _csv
-                        buf = io.StringIO()
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                            f.readline()
-                            w = _csv.writer(buf, delimiter='\t', lineterminator='\n', quoting=_csv.QUOTE_MINIMAL)
-                            for line in f:
-                                parts = line.rstrip('\n').split('\t')
-                                row2 = parts[:len(headers)] + [''] * (len(headers) - len(parts))
-                                row2 = [c.strip() for c in row2]
-                                w.writerow(row2)
-                        buf.seek(0)
-                        copy_cmd = f"COPY {table} ({copy_cols}) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
-                        raw_cur.execute(copy_cmd, buf.read())
+                        # No psycopg copy API available; force fallback loader
+                        raise RuntimeError("psycopg copy API not available")
                     conn.commit()
                     print(f"  (COPY) inserted rows into {table}")
                     continue
@@ -236,7 +292,8 @@ def load_data_to_sqlite():
                         if hasattr(raw_cur,'copy'):
                             copy_cmd = "COPY owners (acct, ln_num, name, aka, pct_own) FROM STDIN WITH (FORMAT csv, DELIMITER E'\t', NULL '', HEADER false)"
                             import csv as _csv, io
-                            with open(owners_path,'r',encoding='utf-8',errors='ignore') as f:
+                            enc_own = detect_text_encoding(owners_path)
+                            with open(owners_path,'r',encoding=enc_own,errors='ignore') as f:
                                 f.readline()
                                 try:
                                     with raw_cur.copy(copy_cmd) as cp:  # type: ignore[attr-defined]
@@ -343,7 +400,10 @@ def load_data_to_sqlite():
                 mapping={'X':10,'A':9,'B':7,'C':5,'D':3,'E':1.5,'F':1}
                 if base in mapping: quality_rank[c1.strip()]=mapping[base]
         except Exception:
-            pass
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
         if not quality_rank:
             quality_rank={'X':10,'A':9,'B':7,'C':5,'D':3,'E':1.5,'F':1}
 
@@ -352,7 +412,11 @@ def load_data_to_sqlite():
         try:
             cursor.execute("SELECT col1,col2 FROM land_use_code_desc WHERE col1<>''")
             land_use_map={r[0].strip():r[1].strip() for r in cursor.fetchall() if r[0]}
-        except Exception: pass
+        except Exception:
+            try:
+                cursor.connection.rollback()
+            except Exception:
+                pass
         fallback_types={'A1':'Residential Single-Family','A2':'Residential Multi-Family','B2':'Commercial','B3':'Industrial','X3':'Exempt'}
         for k,v in fallback_types.items(): land_use_map.setdefault(k,v)
 
@@ -384,7 +448,7 @@ def load_data_to_sqlite():
                 if fupper=='STC' and u>0 and fc.get('c_stories') is None:
                     try: fc['c_stories']=int(round(u))
                     except: pass
-        except sqlite3.OperationalError:
+        except Exception:
             pass
 
         # Amenities
@@ -396,7 +460,8 @@ def load_data_to_sqlite():
                     up=desc.upper()
                     if any(k in up for k in ['POOL','GARAGE','DECK','PATIO','FIRE','SPA']):
                         amenities_data.setdefault(acct.strip(),[]).append(desc.strip())
-        except sqlite3.OperationalError: pass
+        except Exception:
+            pass
 
         # Derive metrics (stories primary from fixtures)
         rows=[]; now_year=datetime.now().year
@@ -446,7 +511,39 @@ def load_data_to_sqlite():
             rows.append((acct, beds, baths, ptype, qa, q_rating, overall, expl, amenities, stories, has_pool, has_garage))
 
         if rows:
-            cursor.executemany("INSERT INTO property_derived VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+            try:
+                cursor.execute("DROP TABLE IF EXISTS property_derived")
+                cursor.execute("""
+                    CREATE TABLE property_derived (
+                        acct TEXT,
+                        bedrooms TEXT,
+                        bathrooms TEXT,
+                        property_type TEXT,
+                        quality_code TEXT,
+                        quality_rating REAL,
+                        overall_rating REAL,
+                        rating_explanation TEXT,
+                        amenities TEXT,
+                        stories INTEGER,
+                        has_pool INTEGER,
+                        has_garage INTEGER
+                    )
+                """)
+            except Exception:
+                try:
+                    cursor.connection.rollback()
+                except Exception:
+                    pass
+            cursor.executemany(
+                """
+                INSERT INTO property_derived (
+                    acct, bedrooms, bathrooms, property_type, quality_code,
+                    quality_rating, overall_rating, rating_explanation, amenities,
+                    stories, has_pool, has_garage
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                rows,
+            )
             conn.commit(); print(f"Inserted {len(rows)} derived property rows.")
         else:
             print("No derived property metrics generated.")
@@ -488,36 +585,35 @@ def search_properties(account: str = "", street: str = "", zip_code: str = "", o
     conn = get_connection(str(DB_PATH))
     cursor = wrap_cursor(conn)
     try:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
-        has_geo = cursor.fetchone() is not None
+        has_geo = _table_exists(cursor, 'property_geo')
     finally:
         cursor.close(); conn.close()
 
     geo_join = "LEFT JOIN property_geo pg ON ra.acct = pg.acct" if has_geo else ""
-    geo_select = "pg.latitude AS 'Latitude', pg.longitude AS 'Longitude'" if has_geo else "NULL AS 'Latitude', NULL AS 'Longitude'"
+    geo_select = 'pg.latitude AS "Latitude", pg.longitude AS "Longitude"' if has_geo else 'NULL AS "Latitude", NULL AS "Longitude"'
 
     sql = f"""
-    SELECT ra.site_addr_1 AS 'Address',
-         ra.site_addr_3 AS 'Zip Code',
-         br.eff AS 'Build Year',
-         pd.bedrooms AS 'Bedrooms',
-         pd.bathrooms AS 'Bathrooms',
-         pd.stories AS 'Stories',
-         br.im_sq_ft AS 'Building Area',
-         ra.land_val AS 'Land Value',
-         ra.bld_val AS 'Building Value',
-         CAST(ra.acct AS TEXT) AS 'Account Number',
-         ra.tot_mkt_val AS 'Market Value',
+    SELECT ra.site_addr_1 AS "Address",
+         ra.site_addr_3 AS "Zip Code",
+         br.eff AS "Build Year",
+         pd.bedrooms AS "Bedrooms",
+         pd.bathrooms AS "Bathrooms",
+         pd.stories AS "Stories",
+         br.im_sq_ft AS "Building Area",
+         ra.land_val AS "Land Value",
+         ra.bld_val AS "Building Value",
+         CAST(ra.acct AS TEXT) AS "Account Number",
+         ra.tot_mkt_val AS "Market Value",
          CASE WHEN br.im_sq_ft IS NULL OR br.im_sq_ft = '' OR br.im_sq_ft = '0' THEN NULL
-             ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS 'Price Per Sq Ft',
-         ra.land_ar AS 'Land Area',
-         pd.property_type AS 'Property Type',
-         pd.amenities AS 'Estimated Amenities',
-        pd.overall_rating AS 'Overall Rating',
-        pd.quality_rating AS 'Quality Rating',
-        NULL AS 'Value Rating',
-        pd.rating_explanation AS 'Rating Explanation',
-        COALESCE(ow.name, ra.mailto) AS 'Owner Name',
+             ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS "Price Per Sq Ft",
+         ra.land_ar AS "Land Area",
+         pd.property_type AS "Property Type",
+         pd.amenities AS "Estimated Amenities",
+        pd.overall_rating AS "Overall Rating",
+        pd.quality_rating AS "Quality Rating",
+        NULL AS "Value Rating",
+        pd.rating_explanation AS "Rating Explanation",
+        COALESCE(ow.name, ra.mailto) AS "Owner Name",
            {geo_select}
     FROM real_acct ra
     LEFT JOIN building_res br ON ra.acct = br.acct
@@ -666,8 +762,7 @@ def find_comparables(acct: str, max_distance_miles: float = 15.0, size_tolerance
                 # Fall back to legacy method on any PostGIS error
                 pass
         # Bail out early if geo table absent
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
-        if cur.fetchone() is None:
+        if not _table_exists(cur, 'property_geo'):
             return []  # No geo coordinates available yet
         # Base property with bedroom/bathroom data
         cur.execute("""SELECT ra.acct, ra.site_addr_1, ra.site_addr_3, ra.tot_mkt_val, ra.land_ar, br.im_sq_ft,
@@ -828,8 +923,7 @@ def find_comparables_debug(acct: str, max_distance_miles: float = 5.0, size_tole
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
-        if cur.fetchone() is None:
+        if not _table_exists(cur, 'property_geo'):
             info['reason'] = 'property_geo table missing (run import/geocode step).'
             return info
         cur.execute("""SELECT ra.acct, ra.land_ar, br.im_sq_ft, pg.latitude, pg.longitude
@@ -951,34 +1045,33 @@ def extract_excel_file(account: str = "", street: str = "", zip_code: str = "", 
     conn = get_connection(str(DB_PATH))
     cursor = wrap_cursor(conn)
     try:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='property_geo'")
-        has_geo = cursor.fetchone() is not None
+        has_geo = _table_exists(cursor, 'property_geo')
     finally:
         cursor.close(); conn.close()
-    geo_select = "pg.latitude AS 'Latitude', pg.longitude AS 'Longitude'" if has_geo else "NULL AS 'Latitude', NULL AS 'Longitude'"
+    geo_select = 'pg.latitude AS "Latitude", pg.longitude AS "Longitude"' if has_geo else 'NULL AS "Latitude", NULL AS "Longitude"'
     geo_join = "LEFT JOIN property_geo pg ON ra.acct = pg.acct" if has_geo else ""
 
     sql = f"""
-    SELECT ra.site_addr_1 AS 'Address',
-         ra.site_addr_3 AS 'Zip Code',
-         br.eff AS 'Build Year',
-         pd.bedrooms AS 'Bedrooms',
-         pd.bathrooms AS 'Bathrooms',
-         br.im_sq_ft AS 'Building Area',
-         ra.land_val AS 'Land Value',
-         ra.bld_val AS 'Building Value',
-         CAST(ra.acct AS TEXT) AS 'Account Number',
-         ra.tot_mkt_val AS 'Market Value',
+    SELECT ra.site_addr_1 AS "Address",
+         ra.site_addr_3 AS "Zip Code",
+         br.eff AS "Build Year",
+         pd.bedrooms AS "Bedrooms",
+         pd.bathrooms AS "Bathrooms",
+         br.im_sq_ft AS "Building Area",
+         ra.land_val AS "Land Value",
+         ra.bld_val AS "Building Value",
+         CAST(ra.acct AS TEXT) AS "Account Number",
+         ra.tot_mkt_val AS "Market Value",
          CASE WHEN br.im_sq_ft IS NULL OR br.im_sq_ft = '' OR br.im_sq_ft = '0' THEN NULL
-             ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS 'Price Per Sq Ft',
-         ra.land_ar AS 'Land Area',
-         pd.property_type AS 'Property Type',
-         pd.amenities AS 'Estimated Amenities',
-         pd.overall_rating AS 'Overall Rating',
-         pd.quality_rating AS 'Quality Rating',
-         NULL AS 'Value Rating',
-        pd.rating_explanation AS 'Rating Explanation',
-        COALESCE(ow.name, ra.mailto) AS 'Owner Name'
+             ELSE (CAST(ra.tot_mkt_val AS FLOAT) / CAST(br.im_sq_ft AS FLOAT)) END AS "Price Per Sq Ft",
+         ra.land_ar AS "Land Area",
+         pd.property_type AS "Property Type",
+         pd.amenities AS "Estimated Amenities",
+         pd.overall_rating AS "Overall Rating",
+         pd.quality_rating AS "Quality Rating",
+         NULL AS "Value Rating",
+        pd.rating_explanation AS "Rating Explanation",
+        COALESCE(ow.name, ra.mailto) AS "Owner Name"
     FROM real_acct AS ra
     LEFT JOIN building_res AS br ON ra.acct = br.acct
     LEFT JOIN owners ow ON ra.acct = ow.acct
@@ -1050,7 +1143,7 @@ if __name__ == "__main__":
                 print(f"Loading sample of {table} from {path} ...")
                 headers = create_table_from_csv(cursor, table, path)
                 try:
-                    with open(path, 'r', encoding='mbcs', newline='') as f:
+                    with open(path, 'r', encoding=DEFAULT_ENCODING, newline='') as f:
                         reader = csv.reader(f, delimiter='\t')
                         next(reader)
                         batch = []
@@ -1061,7 +1154,7 @@ if __name__ == "__main__":
                             batch.append(normalized_row)
                         placeholders = ', '.join(['?' for _ in headers])
                         cursor.executemany(f'INSERT INTO {table} VALUES ({placeholders})', batch)
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, LookupError):
                     with open(path, 'r', encoding='utf-8', newline='') as f:
                         reader = csv.reader(f, delimiter='\t')
                         next(reader)

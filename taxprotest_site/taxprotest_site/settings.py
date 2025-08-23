@@ -8,12 +8,16 @@ DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
-    "django.contrib.contenttypes",
-    "django.contrib.staticfiles",
+    "django.contrib.admin",
     "django.contrib.auth",
+    "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    # minimal apps; comparables app will be added incrementally
+    "django.contrib.staticfiles",
+    # Geo support (GDAL/GEOS installed in Docker image)
+    "django.contrib.gis",
+    # local apps
+    "taxprotest_site.comparables",
 ]
 
 MIDDLEWARE = [
@@ -25,7 +29,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
 ]
 
-ROOT_URLCONF = "taxprotest_site.urls"
+ROOT_URLCONF = "taxprotest_site.taxprotest_site.urls"
 
 TEMPLATES = [
     {
@@ -41,15 +45,16 @@ TEMPLATES = [
     }
 ]
 
-WSGI_APPLICATION = "taxprotest_site.wsgi.application"
+WSGI_APPLICATION = "taxprotest_site.taxprotest_site.wsgi.application"
 
 # Database: prefer existing DATABASE_URL or file-based SQLite for quick start
 DATABASE_URL = os.getenv("TAXPROTEST_DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres"):
-    # use dj-database-url in real projects; keep simple here
+    # Use PostGIS backend for GeoDjango when talking to Postgres with spatial support
+    # In production prefer dj-database-url or similar to parse the full URL.
     DATABASES = {
         "default": {
-            "ENGINE": "django.db.backends.postgresql",
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
             "NAME": os.getenv("POSTGRES_DB", "taxprotest"),
             "USER": os.getenv("POSTGRES_USER", "postgres"),
             "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),

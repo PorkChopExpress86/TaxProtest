@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TaxProtest</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            },
+            secondary: {
+              50: '#f8fafc',
+              100: '#f1f5f9',
+              500: '#64748b',
+              600: '#475569',
+              700: '#334155',
+              800: '#1e293b',
+              900: '#0f172a',
+            },
+            accent: {
+              50: '#fdf4ff',
+              100: '#fae8ff',
+              500: '#a855f7',
+              600: '#9333ea',
+              700: '#7c3aed',
+              800: '#6b21a8',
+              900: '#581c87',
+            },
+            success: {
+              50: '#f0fdf4',
+              100: '#dcfce7',
+              500: '#22c55e',
+              600: '#16a34a',
+              700: '#15803d',
+              800: '#166534',
+              900: '#14532d',
+            },
+            warning: {
+              50: '#fffbeb',
+              100: '#fef3c7',
+              500: '#f59e0b',
+              600: '#d97706',
+              700: '#b45309',
+              800: '#92400e',
+              900: '#78350f',
+            },
+            danger: {
+              50: '#fef2f2',
+              100: '#fee2e2',
+              500: '#ef4444',
+              600: '#dc2626',
+              700: '#b91c1c',
+              800: '#991b1b',
+              900: '#7f1d1d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    mark { background: #fde047; }
+    .truncate-180 { max-width: 180px; }
+    .minw-200 { min-width: 200px; }
+  </style>
+  </head>
+<body class="bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen font-sans">
+<header class="bg-gradient-to-r from-primary-600 to-accent-600 text-white shadow-lg">
+  <div class="container mx-auto px-6 py-4">
+    <h1 class="text-3xl font-bold tracking-tight">
+      <a href="/" class="hover:text-blue-100 transition-colors duration-200">TaxProtest</a>
+    </h1>
+  </div>
+</header>
+
+<main class="container mx-auto px-6 py-8">
+{% if messages %}
+  <div class="mb-6">
+    {% for m in messages %}
+      <div class="p-4 mb-3 rounded-lg border-l-4 {% if m.tags == 'success' %}bg-success-50 border-success-500 text-success-800{% elif m.tags == 'error' %}bg-danger-50 border-danger-500 text-danger-800{% elif m.tags == 'warning' %}bg-warning-50 border-warning-500 text-warning-800{% else %}bg-primary-50 border-primary-500 text-primary-800{% endif %}">
+        <div class="flex items-center">
+          <div class="text-sm font-medium">{{ m }}</div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -51,13 +51,14 @@ services:
     environment:
       TAXPROTEST_DATABASE_URL: "postgresql://tax:tax@postgres:5432/taxprotest"
       TAXPROTEST_PROFILE_LOAD: "1"
+      PYTHONPATH: "/app"
     depends_on:
       - postgres
     volumes:
       - ./:/app
       - data_volume:/app/data
       - exports_volume:/app/Exports
-    entrypoint: ["python","scripts/ingest_postgres.py"]
+    entrypoint: ["python","-m","scripts.ingest_postgres"]
 
   refresh:
     image: taxprotest:latest
@@ -80,7 +81,8 @@ services:
     #   start_period: 20s
 
   postgres:
-    image: postgres:16-alpine
+    # Use PostGIS image to provide spatial extensions (PostGIS) required by GeoDjango
+    image: postgis/postgis:16-3.4
     container_name: taxprotest-postgres
     environment:
       POSTGRES_USER: tax
@@ -95,6 +97,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  django:
+    build:
+      context: .
+      dockerfile: taxprotest_site/Dockerfile
+    image: taxprotest-django:latest
+    container_name: taxprotest-django
+    environment:
+      DJANGO_SETTINGS_MODULE: "taxprotest_site.taxprotest_site.settings"
+      TAXPROTEST_DATABASE_URL: "postgresql://tax:tax@postgres:5432/taxprotest"
+      TAXPROTEST_SECRET_KEY: "change-me"
+      TAXPROTEST_DEBUG: "0"
+      # Explicit Postgres envs for settings.py fallback keys
+      POSTGRES_HOST: "postgres"
+      POSTGRES_DB: "taxprotest"
+      POSTGRES_USER: "tax"
+      POSTGRES_PASSWORD: "tax"
+    depends_on:
+      - postgres
+    ports:
+      - "5003:8000"
+    volumes:
+      - ./:/app
+      - data_volume:/app/data
+      - exports_volume:/app/Exports
     restart: unless-stopped
 
 volumes:

@@ -9,8 +9,16 @@ CREATE INDEX IF NOT EXISTS idx_property_derived_acct ON property_derived(acct);
 CREATE INDEX IF NOT EXISTS idx_real_acct_addr ON real_acct(site_addr_1);
 CREATE INDEX IF NOT EXISTS idx_real_acct_zip ON real_acct(site_addr_3);
 
--- Property derived PPSF index (added by ensure_ppsf_metric in code)
-CREATE INDEX IF NOT EXISTS idx_property_derived_ppsf ON property_derived(ppsf);
+-- Property derived PPSF index (only if column exists)
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'property_derived' AND column_name = 'ppsf'
+	) THEN
+		CREATE INDEX IF NOT EXISTS idx_property_derived_ppsf ON property_derived(ppsf);
+	END IF;
+END $$;
 
 -- Phase 2: ancillary / supplemental tables now bulk loaded via COPY
 CREATE INDEX IF NOT EXISTS idx_owners_acct ON owners(acct);

@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="max-w-7xl mx-auto">
+  <div class="mb-6">
+    <a class="inline-flex items-center px-4 py-2 text-primary-600 hover:text-primary-800 font-medium transition-colors duration-200 show-loading" href="/">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+      </svg>
+      Back to Search
+    </a>
+    <h2 class="text-3xl font-bold text-gray-900 mt-4">
+      Comparables for <code class="bg-gray-100 px-2 py-1 rounded text-primary-600">{{ acct }}</code>
+    </h2>
+  </div>
+
+  {% if meta %}
+  <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-primary-500 p-4 mb-6 rounded-r-lg">
+    <div class="text-sm text-gray-800 space-y-1">
+      <div class="flex flex-wrap items-center gap-4">
+        <span><strong class="text-primary-700">Geo:</strong> <span class="font-medium">{{ meta.geo_tier|default:'n/a' }}</span>{% if meta.radius_miles %} <span class="text-gray-600">({{ meta.radius_miles }} mi)</span>{% endif %}</span>
+        <span><strong class="text-primary-700">Size:</strong> <span class="font-medium">{{ meta.size_band|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Lot:</strong> <span class="font-medium">{{ meta.lot_band|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Year:</strong> <span class="font-medium">{{ meta.year_band|default:'n/a' }}</span></span>
+      </div>
+      <div class="flex flex-wrap items-center gap-4">
+        <span><strong class="text-primary-700">Beds/Baths:</strong> <span class="font-medium">{{ meta.bed_bath_band|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Stories:</strong> <span class="font-medium">{{ meta.story_band|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Pool:</strong> <span class="font-medium">{{ meta.pool_rule|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Garage:</strong> <span class="font-medium">{{ meta.garage_rule|default:'n/a' }}</span></span>
+        <span><strong class="text-primary-700">Attempts:</strong> <span class="font-medium text-accent-600">{{ meta.attempts }}</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
+    <form method="get" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 items-end" action="">
+      <div class="space-y-2">
+        <label class="block text-sm font-semibold text-gray-700">Min comps</label>
+        <input type="number" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors" name="min" value="{{ request.GET.min|default:20 }}" min="1" max="50" placeholder="min" title="Minimum desired comparables" />
+      </div>
+      <div class="space-y-2">
+        <label class="block text-sm font-semibold text-gray-700">Max comps</label>
+        <input type="number" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors" name="max" value="{{ request.GET.max|default:25 }}" min="1" max="50" placeholder="max" title="Maximum comparables to return" />
+      </div>
+      <div class="space-y-2">
+        <label class="block text-sm font-semibold text-gray-700">Max radius (mi)</label>
+        <input type="number" step="0.1" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors" name="max_radius" value="{{ request.GET.max_radius|default:'' }}" placeholder="(default)" title="Cap search radius (miles)" />
+      </div>
+      <div class="flex items-center space-x-2">
+        <input class="w-4 h-4 text-primary-600 bg-gray-100 border-gray-300 rounded focus:ring-primary-500 focus:ring-2" type="checkbox" id="strict_first" name="strict_first" value="1" {% if request.GET.strict_first %}checked{% endif %} />
+        <label class="text-sm font-medium text-gray-700" for="strict_first">Strict pass first</label>
+      </div>
+      <div>
+        <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-2 bg-gradient-to-r from-primary-600 to-accent-600 text-white font-semibold rounded-lg hover:from-primary-700 hover:to-accent-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-all duration-200 transform hover:scale-105">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+          Recompute
+        </button>
+      </div>
+    </form>
+
+    {% if comparables %}
+    <div class="mt-6 flex gap-3">
+      <a class="inline-flex items-center px-4 py-2 bg-success-600 text-white font-medium rounded-lg hover:bg-success-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-success-500 transition-all duration-200 transform hover:scale-105" href="{% url 'export_comparables' acct=acct fmt='xlsx' %}?{% for k,v in request.GET.items %}{{ k }}={{ v|urlencode }}&{% endfor %}" title="Download as Excel">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        Export Excel
+      </a>
+      <a class="inline-flex items-center px-4 py-2 bg-secondary-600 text-white font-medium rounded-lg hover:bg-secondary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary-500 transition-all duration-200 transform hover:scale-105" href="{% url 'export_comparables' acct=acct fmt='csv' %}?{% for k,v in request.GET.items %}{{ k }}={{ v|urlencode }}&{% endfor %}" title="Download as CSV">
+        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        Export CSV
+      </a>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if subject %}
+  <div class="bg-white rounded-xl shadow-lg overflow-hidden mb-8">
+    <div class="bg-gradient-to-r from-primary-600 to-accent-600 text-white px-6 py-4">
+      <h3 class="text-lg font-semibold flex items-center">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+        </svg>
+        Subject Property
+      </h3>
+    </div>
+    <div class="p-6">
+      <div class="space-y-2">
+        <div class="text-lg"><strong class="text-gray-700">Address:</strong> <span class="text-gray-900">{{ subject.site_addr_1|default:'' }} {{ subject.site_addr_3|default:'' }}</span></div>
+        <div class="text-sm text-gray-600"><strong>Owner:</strong> {{ subject.owner_name|default:'' }}</div>
+        <div class="text-sm"><strong class="text-gray-700">Appraised (Market) Value:</strong> {% if subject.market_value %}<span class="text-lg font-bold text-green-600">${{ subject.market_value|floatformat:0 }}</span>{% else %}<span class="text-gray-500">-</span>{% endif %}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if comparables %}
+  <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+    <div class="bg-gradient-to-r from-secondary-600 to-secondary-700 text-white px-6 py-4">
+      <h3 class="text-lg font-semibold flex items-center">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        Comparables ({{ comparables|length }})
+      </h3>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead class="bg-gray-50">
+          <tr class="border-b border-gray-200">
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Acct</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Score</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Address</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Year</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Beds</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Baths</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Sty</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">P</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">G</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">PPSF</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Value</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Amenities</th>
+            <th class="px-4 py-3 text-left text-xs font-semibold text-gray-900 uppercase tracking-wider">Dist (mi)</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200">
+          {% for c in comparables %}
+          <tr class="hover:bg-gray-50 transition-colors duration-150">
+            <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ c.acct }}</td>
+            <td class="px-4 py-3 text-sm">
+              <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full {% if c.score >= 80 %}bg-green-100 text-green-800{% elif c.score >= 60 %}bg-yellow-100 text-yellow-800{% else %}bg-red-100 text-red-800{% endif %}">
+                {{ c.score }}
+              </span>
+            </td>
+            <td class="px-4 py-3 text-sm text-gray-700">{{ c.site_addr_1|default:'' }} {{ c.site_addr_3|default:'' }}</td>
+            <td class="px-4 py-3 text-sm text-gray-700">{{ c.build_year }}</td>
+            <td class="px-4 py-3 text-sm text-gray-700">{{ c.bedrooms }}</td>
+            <td class="px-4 py-3 text-sm text-gray-700">{{ c.bathrooms }}</td>
+            <td class="px-4 py-3 text-sm text-gray-700">{{ c.stories|default:'' }}</td>
+            <td class="px-4 py-3 text-sm">
+              {% if c.has_pool == 1 %}<span class="text-blue-600 font-medium">Y</span>{% elif c.has_pool == 0 %}<span class="text-gray-400">N</span>{% else %}<span class="text-gray-300">-</span>{% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm">
+              {% if c.has_garage == 1 %}<span class="text-blue-600 font-medium">Y</span>{% elif c.has_garage == 0 %}<span class="text-gray-400">N</span>{% else %}<span class="text-gray-300">-</span>{% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm font-semibold text-green-600">{% if c.ppsf %}${{ c.ppsf|floatformat:2 }}{% else %}<span class="text-gray-400">-</span>{% endif %}</td>
+            <td class="px-4 py-3 text-sm font-semibold text-blue-600">{% if c.market_value %}${{ c.market_value|floatformat:0 }}{% else %}<span class="text-gray-400">-</span>{% endif %}</td>
+            <td class="px-4 py-3 text-sm text-gray-700 truncate-180">{{ c.amenities|default:'' }}</td>
+            <td class="px-4 py-3 text-sm font-medium text-purple-600">{{ c.distance_miles|default:0|floatformat:2 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  {% if meta %}
+  <div class="bg-white rounded-xl shadow-lg p-8 text-center">
+    <svg class="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+    </svg>
+    <p class="text-lg text-gray-600 font-medium">No comparables found</p>
+    <p class="text-sm text-gray-500 mt-2">Try adjusting your search parameters above</p>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+
+{% endblock %}

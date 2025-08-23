@@ -1,6 +1,8 @@
 from django.urls import path, include
-from django.http import HttpResponse
+from . import views
 
 urlpatterns = [
-    path("", lambda request: HttpResponse("TaxProtest Django scaffold")),
+    path("health", views.health, name="health"),
+    path("", include("taxprotest_site.comparables.urls", namespace="comparables")),
 ]
+
