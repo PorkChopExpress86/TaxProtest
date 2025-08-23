@@ -64,4 +64,12 @@ instance/
 
 # Legacy root tests & temp scripts (now under tests/)
 test_*.py
-tmp_*.py__pycache__/
+tmp_*.py
+__pycache__/
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# Local machine data
+local_settings.py
