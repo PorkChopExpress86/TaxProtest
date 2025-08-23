@@ -64,4 +64,4 @@ instance/
 
 # Legacy root tests & temp scripts (now under tests/)
 test_*.py
-tmp_*.py
+tmp_*.py__pycache__/
